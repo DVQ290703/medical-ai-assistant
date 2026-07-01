@@ -1,6 +1,7 @@
 # heavy / generated — DVC-tracked, never in git
-data/
-artifacts/
+# LƯU Ý: neo dấu "/" đầu để CHỈ ignore ở gốc, không đụng src/data/
+/data/
+/artifacts/
 *.pt
 *.bin
 *.safetensors
