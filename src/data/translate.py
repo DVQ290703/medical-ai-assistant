@@ -67,8 +67,6 @@ class QualityGate:
 
     def check_terminology(self, src: str, tgt: str) -> tuple[float, list[str]]:
         reasons = []
-        src_doses = {self._norm_dose(x) for x in _DOSE_RE.findall(src)}
-        # findall với group -> lấy lại full match
         src_doses = {self._norm_dose(m.group()) for m in _DOSE_RE.finditer(src)}
         tgt_doses = {self._norm_dose(m.group()) for m in _DOSE_RE.finditer(tgt)}
         src_drugs = set(_DRUG_RE.findall(src))
@@ -161,6 +159,11 @@ class QualityGate:
 
 # ============ Backend dịch (pluggable) ============
 class Translator(ABC):
+    last_usage: dict = {"in": 0, "out": 0}
+
+    def reset_usage(self) -> None:
+        self.last_usage = {"in": 0, "out": 0}
+
     @abstractmethod
     def translate(self, text: str) -> str: ...
 
@@ -169,24 +172,62 @@ class Translator(ABC):
 
 
 class NLLBTranslator(Translator):
-    """Offline, chạy được trên Kaggle free. Dịch thuần (không hiểu ngữ cảnh y khoa)."""
+    """Offline, chạy được trên Kaggle free. Dịch thuần (không hiểu ngữ cảnh y khoa).
+
+    Dùng AutoModelForSeq2SeqLM TRỰC TIẾP (không dùng pipeline('translation') vì task string
+    kén version transformers -> lỗi 'Invalid translation task'). Chia câu để CoT dài không
+    bị cắt cụt (nếu không quality-gate sẽ REJECT nhầm vì tưởng dịch tệ).
+    """
 
     def __init__(self, model="facebook/nllb-200-distilled-600M",
-                 src_lang="eng_Latn", tgt_lang="vie_Latn"):
-        from transformers import pipeline  # lazy: chỉ cần khi thật sự dịch
-        self.pipe = pipeline("translation", model=model,
-                             src_lang=src_lang, tgt_lang=tgt_lang, max_length=1024)
+                 src_lang="eng_Latn", tgt_lang="vie_Latn", device=None, max_length=512):
+        from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+        import torch
+
+        self.tok = AutoTokenizer.from_pretrained(model, src_lang=src_lang)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model)
+        self.max_length = max_length
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = self.model.to(self.device)
+
+        # id token ngôn ngữ đích — API khác nhau giữa các version transformers
+        bos = self.tok.convert_tokens_to_ids(tgt_lang)
+        if bos is None or bos == self.tok.unk_token_id:
+            bos = getattr(self.tok, "lang_code_to_id", {}).get(tgt_lang)
+        if bos is None:
+            raise ValueError(f"Không lấy được token id cho ngôn ngữ đích {tgt_lang}")
+        self.forced_bos = bos
+        self.reset_usage()   # offline -> luôn 0, không đụng budget
+
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        parts = re.split(r"(?<=[.!?…])\s+", text.strip())
+        return [p for p in parts if p]
+
+    def _translate_one(self, text: str) -> str:
+        enc = self.tok(text, return_tensors="pt", truncation=True,
+                       max_length=self.max_length).to(self.device)
+        out = self.model.generate(**enc, forced_bos_token_id=self.forced_bos,
+                                  max_length=self.max_length)
+        return self.tok.batch_decode(out, skip_special_tokens=True)[0]
 
     def translate(self, text: str) -> str:
-        # NLLB giới hạn độ dài -> nên chia câu; ở đây rút gọn cho scaffold.
-        return self.pipe(text)[0]["translation_text"]
+        if not text.strip():
+            return ""
+        # dịch từng câu rồi ghép -> đoạn dài (CoT) không bị cắt cụt
+        return " ".join(self._translate_one(s) for s in self._split_sentences(text))
 
 
 class LLMTranslator(Translator):
-    """Medical-aware qua LLM API (GPT-5.5/Gemini...). Chất lượng cao hơn, TỐN PHÍ, cần mạng.
+    """Medical-aware qua LLM API (OpenAI GPT-5.5). Chất lượng cao, TỐN PHÍ, cần mạng.
 
-    Ưu điểm: prompt được để GIỮ tên thuốc, dịch thuật ngữ theo chuẩn VN, giữ format CoT —
-    thứ NLLB không làm được.
+    Ưu điểm so với NLLB: hiểu ngữ cảnh y khoa -> GIỮ tên thuốc, dịch thuật ngữ theo chuẩn VN,
+    văn phong tự nhiên, giữ cấu trúc CoT.
+
+    Tối ưu: dịch CẢ record trong 1 API call (trả JSON) -> ít call hơn + model thấy toàn bộ
+    ngữ cảnh nên dịch nhất quán hơn 3 call rời.
+
+    CHI PHÍ: ~$0.04/mẫu với gpt-5.5 -> cân nhắc dịch SUBSET đã lọc, không dịch cả 40k.
     """
 
     SYSTEM = (
@@ -194,20 +235,86 @@ class LLMTranslator(Translator):
         "1. GIỮ NGUYÊN tên thuốc gốc Latin (Warfarin, Metformin...).\n"
         "2. GIỮ NGUYÊN mọi liều/số + đơn vị (5mg, 2.5 mg/kg...).\n"
         "3. Dịch thuật ngữ theo chuẩn y khoa Việt Nam, văn phong tự nhiên như bác sĩ Việt.\n"
-        "4. GIỮ NGUYÊN cấu trúc/thứ tự các bước suy luận.\n"
-        "Chỉ trả về bản dịch, không giải thích."
+        "4. GIỮ NGUYÊN cấu trúc/thứ tự các bước suy luận trong chain-of-thought.\n"
+    )
+    # prompt cho dịch cả record 1 lần
+    _RECORD_INSTR = (
+        "Dịch 3 trường sau sang tiếng Việt. Trả về DUY NHẤT một JSON object với đúng 3 khoá "
+        '"question", "cot", "response" (không thêm chữ nào ngoài JSON):\n\n'
+        "question: {q}\n\ncot: {c}\n\nresponse: {r}"
     )
 
-    def __init__(self, model="gpt-5.5", api_key_env="OPENAI_API_KEY"):
+    def __init__(self, model="gpt-5.5", api_key_env="OPENAI_API_KEY",
+                 max_retries=4, rate_limit_s=0.0, temperature=0.2):
+        import os
+        from openai import OpenAI  # lazy import: chỉ cần khi thật sự dùng
+
+        key = os.environ.get(api_key_env)
+        if not key:
+            raise ValueError(
+                f"Chưa có API key ở biến môi trường {api_key_env}. "
+                f"Trên Kaggle: os.environ['{api_key_env}'] = "
+                f"UserSecretsClient().get_secret('{api_key_env}')"
+            )
+        self.client = OpenAI(api_key=key)
         self.model = model
-        self.api_key_env = api_key_env
-        # TODO: khởi tạo client thật (openai/google). Để lười để scaffold không cần key.
+        self.max_retries = max_retries
+        self.rate_limit_s = rate_limit_s
+        self.temperature = temperature
+        self.reset_usage()
+
+    def _call(self, user_msg: str, force_json: bool = False) -> str:
+        import time
+        kwargs = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.SYSTEM},
+                {"role": "user", "content": user_msg},
+            ],
+        }
+        if force_json:
+            kwargs["response_format"] = {"type": "json_object"}
+        # một số model reasoning không nhận temperature -> thử, lỗi thì bỏ
+        try_kwargs = dict(kwargs, temperature=self.temperature)
+
+        last_err = None
+        for attempt in range(self.max_retries):
+            try:
+                try:
+                    resp = self.client.chat.completions.create(**try_kwargs)
+                except Exception:
+                    resp = self.client.chat.completions.create(**kwargs)  # bỏ temperature
+                if self.rate_limit_s:
+                    time.sleep(self.rate_limit_s)
+                u = getattr(resp, "usage", None)
+                if u is not None:
+                    self.last_usage["in"] += getattr(u, "prompt_tokens", 0) or 0
+                    self.last_usage["out"] += getattr(u, "completion_tokens", 0) or 0
+                return resp.choices[0].message.content.strip()
+            except Exception as e:  # rate limit / lỗi mạng -> backoff rồi thử lại
+                last_err = e
+                time.sleep(2 ** attempt)
+        raise RuntimeError(f"API thất bại sau {self.max_retries} lần: {last_err}")
 
     def translate(self, text: str) -> str:
-        # TODO: gọi API thật với self.SYSTEM + text. Nhớ retry + rate limit.
-        raise NotImplementedError(
-            "Điền API call ở đây. Cần key + mạng (không chạy offline trên Kaggle free)."
-        )
+        """Dịch một chuỗi (dùng bởi quality-gate/fallback)."""
+        if not text.strip():
+            return ""
+        return self._call(f"Dịch sang tiếng Việt, chỉ trả bản dịch:\n\n{text}")
+
+    def translate_record(self, rec: dict) -> dict:
+        """Dịch cả record trong 1 call, trả JSON -> nhất quán + tiết kiệm."""
+        msg = self._RECORD_INSTR.format(
+            q=rec.get("question", ""), c=rec.get("cot", ""), r=rec.get("response", ""))
+        raw = self._call(msg, force_json=True)
+        try:
+            data = json.loads(raw)
+            return {"question": data.get("question", "").strip(),
+                    "cot": data.get("cot", "").strip(),
+                    "response": data.get("response", "").strip()}
+        except json.JSONDecodeError:
+            # model không trả JSON hợp lệ -> fallback dịch từng field
+            return {k: self.translate(v) if v else "" for k, v in rec.items()}
 
 
 def get_translator(cfg: dict) -> Translator:
@@ -219,50 +326,116 @@ def get_translator(cfg: dict) -> Translator:
     raise ValueError(f"engine không hỗ trợ: {engine}")
 
 
+def _load_state(path: Path) -> dict:
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"date": "", "tokens_today": 0, "done": 0,
+            "kept": 0, "rejected": 0, "needs_human": 0}
+
+
+def _save_state(path: Path, state: dict) -> None:
+    path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+
+def _final_stats(state: dict, total: int) -> dict:
+    return {"total": total, "done": state["done"], "kept": state["kept"],
+            "rejected": state["rejected"], "needs_human": state["needs_human"],
+            "tokens_today": state["tokens_today"]}
+
+
 def translate_dataset(config_path: str, in_path: str, out_path: str,
-                      report_path: str = "reports/translation_quality.md") -> dict:
+                      report_path: str = "reports/translation_quality.md",
+                      daily_token_budget: int | None = None,
+                      translator: "Translator | None" = None) -> dict:
+    """Dịch có ĐẾM TOKEN + TỰ DỪNG theo hạn mức ngày + RESUME.
+
+    - Ghi incrementally (append) -> crash-safe; chạy lại lệnh này là TIẾP TỤC từ chỗ dừng.
+    - Chỉ LLM tiêu token; NLLB offline -> usage=0 -> không bao giờ chạm budget (dịch hết 1 lần).
+    - State ở <out>.state.json: {date, tokens_today, done, kept, rejected, needs_human}.
+    - Sang ngày mới: tokens_today tự reset 0, GIỮ nguyên tiến độ 'done'.
+    - Mẫu bị loại/cần review ghi ra <out>.rejected.jsonl / <out>.needs_human.jsonl.
+    """
+    from datetime import date
+
     cfg = yaml.safe_load(open(config_path, encoding="utf-8"))
-    translator = get_translator(cfg)
+    translator = translator or get_translator(cfg)
     gate = QualityGate(cfg)
+    budget = (daily_token_budget
+              or cfg.get("translation", {}).get("daily_token_budget")
+              or 2_400_000)   # margin dưới 2.5M free tier
+
+    out = Path(out_path); out.parent.mkdir(parents=True, exist_ok=True)
+    rej_path = out.with_suffix(".rejected.jsonl")
+    hum_path = out.with_suffix(".needs_human.jsonl")
+    state_path = out.with_suffix(".state.json")
+
+    state = _load_state(state_path)
+    today = date.today().isoformat()
+    if state.get("date") != today:      # ngày mới -> reset token, giữ tiến độ
+        state["date"] = today
+        state["tokens_today"] = 0
 
     src_recs = [json.loads(l) for l in open(in_path, encoding="utf-8")]
-    kept, rejected, human = [], [], []
-    for rec in src_recs:
-        tgt = translator.translate_record(rec)
-        res = gate.evaluate(rec, tgt)
-        row = {**tgt, "_gate": res.scores, "_reasons": res.reasons}
-        if res.needs_human:
-            human.append(row)
-        elif res.passed:
-            kept.append(row)
-        else:
-            rejected.append(row)
+    done = state["done"]
+    if done >= len(src_recs):
+        print(f"[translate] Đã dịch xong toàn bộ {len(src_recs)} mẫu.")
+        return _final_stats(state, len(src_recs))
 
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        for r in kept:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    f_keep = open(out, "a", encoding="utf-8")
+    f_rej = open(rej_path, "a", encoding="utf-8")
+    f_hum = open(hum_path, "a", encoding="utf-8")
+    stopped = False
+    try:
+        for i in range(done, len(src_recs)):
+            if state["tokens_today"] >= budget:
+                stopped = True
+                print(f"[translate] Chạm hạn mức ngày ({budget:,} token). Dừng ở mẫu "
+                      f"{i}/{len(src_recs)}. Chạy lại lệnh này (ngày mai) để tiếp tục.")
+                break
+            rec = src_recs[i]
+            if hasattr(translator, "reset_usage"):
+                translator.reset_usage()
+            tgt = translator.translate_record(rec)
+            res = gate.evaluate(rec, tgt)
+            row = json.dumps({**tgt, "_gate": res.scores, "_reasons": res.reasons},
+                             ensure_ascii=False) + "\n"
+            if res.needs_human:
+                f_hum.write(row); state["needs_human"] += 1
+            elif res.passed:
+                f_keep.write(row); state["kept"] += 1
+            else:
+                f_rej.write(row); state["rejected"] += 1
+            f_keep.flush(); f_rej.flush(); f_hum.flush()
 
-    stats = {"total": len(src_recs), "kept": len(kept),
-             "rejected": len(rejected), "needs_human": len(human)}
-    _write_report(report_path, stats, rejected[:5], human[:5])
+            state["tokens_today"] += (translator.last_usage.get("in", 0)
+                                      + translator.last_usage.get("out", 0))
+            state["done"] = i + 1
+            _save_state(state_path, state)   # persist mỗi mẫu -> crash-safe
+    finally:
+        f_keep.close(); f_rej.close(); f_hum.close()
+
+    stats = _final_stats(state, len(src_recs))
+    stats["stopped_at_budget"] = stopped
+    _write_report(report_path, state, budget, len(src_recs))
     print(f"[translate] {stats}")
     return stats
 
 
-def _write_report(path, stats, rej_ex, hum_ex):
+def _write_report(path, state, budget, total):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+    pct = 100 * state["done"] / max(total, 1)
     lines = ["# Translation Quality Report\n",
-             f"- total: {stats['total']}",
-             f"- kept: {stats['kept']}",
-             f"- rejected: {stats['rejected']}",
-             f"- needs_human (có liều + nghi ngờ): {stats['needs_human']}\n",
-             "## Ví dụ bị loại"]
-    for r in rej_ex:
-        lines.append(f"- scores={r['_gate']} | reasons={r['_reasons']}")
-    lines.append("\n## Ví dụ cần review tay")
-    for r in hum_ex:
-        lines.append(f"- scores={r['_gate']} | reasons={r['_reasons']}")
+             f"- tiến độ: {state['done']}/{total} ({pct:.1f}%)",
+             f"- kept: {state['kept']}",
+             f"- rejected: {state['rejected']}",
+             f"- needs_human (có liều + nghi ngờ): {state['needs_human']}",
+             f"- tokens_today: {state['tokens_today']:,} / budget {budget:,}\n",
+             "Chi tiết mẫu bị loại / cần review tay:",
+             "- `<out>.rejected.jsonl`",
+             "- `<out>.needs_human.jsonl`"]
     open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 
 
