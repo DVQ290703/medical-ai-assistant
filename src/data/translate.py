@@ -37,7 +37,24 @@ _DOSE_RE = re.compile(
     re.IGNORECASE,
 )
 # ---- token thuốc: chữ hoa Latin không đứng đầu câu (Warfarin, Metformin...) ----
+# LƯU Ý: regex hậu tố là PROXY thô -> bắt nhầm từ thường (Calculate, State...) và
+# hormone/chất mà bản dịch có quyền viết tắt (Triiodothyronine -> T3). Production nên
+# thay bằng từ điển thuốc thật (Dược thư/RxNorm). Tạm thời: blacklist + coi thuốc mất
+# là "nghi ngờ" (review) chứ không loại thẳng.
 _DRUG_RE = re.compile(r"(?<![.\n]\s)(?<!^)\b[A-Z][a-z]{3,}(?:in|ol|ine|ide|one|am|il|ate)\b")
+
+# từ tiếng Anh thường khớp nhầm pattern trên -> loại khỏi danh sách "tên thuốc"
+_DRUG_BLACKLIST = {
+    "Calculate", "Evaluate", "Estimate", "Indicate", "Update", "State", "Rate",
+    "Given", "Determine", "Consider", "Baseline", "Guideline", "Timeline",
+    "Outcome", "Response", "Disease", "Increase", "Decrease", "Release",
+    "Female", "Routine", "Machine", "Combine", "Examine", "Medicine",
+}
+# hormone/chất thường được viết tắt hợp lệ khi dịch (không coi là "mất" nếu có viết tắt)
+_HORMONE_ABBR = {
+    "Thyroxine": "T4", "Triiodothyronine": "T3",
+    "Thyrotropin": "TSH", "Cortisol": "cortisol",
+}
 
 
 @dataclass
@@ -65,26 +82,35 @@ class QualityGate:
     def _norm_dose(s: str) -> str:
         return s.lower().replace(" ", "").replace(",", ".")
 
-    def check_terminology(self, src: str, tgt: str) -> tuple[float, list[str]]:
+    def check_terminology(self, src: str, tgt: str) -> tuple[float, set, list[str]]:
+        """Trả (dose_score, missing_drugs, reasons).
+
+        - dose_score: tỷ lệ liều/số được giữ (LOẠI CỨNG nếu <1 vì rớt liều là nguy hiểm).
+        - missing_drugs: tên thuốc nghi bị mất -> chỉ đưa REVIEW, không loại (có thể do
+          viết tắt hợp lệ như Triiodothyronine->T3, hoặc regex bắt nhầm từ thường).
+        """
         reasons = []
+        # --- liều/số (an toàn, loại cứng) ---
         src_doses = {self._norm_dose(m.group()) for m in _DOSE_RE.finditer(src)}
         tgt_doses = {self._norm_dose(m.group()) for m in _DOSE_RE.finditer(tgt)}
-        src_drugs = set(_DRUG_RE.findall(src))
-        tgt_text = tgt
-
         missing_dose = src_doses - tgt_doses
-        missing_drug = {d for d in src_drugs if d not in tgt_text}
-
-        total = len(src_doses) + len(src_drugs)
-        if total == 0:
-            return 1.0, reasons  # không có thuật ngữ cần giữ
-        kept = (len(src_doses) - len(missing_dose)) + (len(src_drugs) - len(missing_drug))
-        score = kept / total
+        dose_score = 1.0 if not src_doses else (len(src_doses) - len(missing_dose)) / len(src_doses)
         if missing_dose:
-            reasons.append(f"MẤT liều: {sorted(missing_dose)}")
-        if missing_drug:
-            reasons.append(f"MẤT tên thuốc: {sorted(missing_drug)}")
-        return score, reasons
+            reasons.append(f"MẤT liều/số (loại): {sorted(missing_dose)}")
+
+        # --- tên thuốc (chỉ nghi ngờ) ---
+        src_drugs = {d for d in _DRUG_RE.findall(src) if d not in _DRUG_BLACKLIST}
+        missing_drugs = set()
+        for d in src_drugs:
+            if d in tgt:
+                continue
+            abbr = _HORMONE_ABBR.get(d)          # chấp nhận viết tắt hợp lệ (T3/T4/TSH...)
+            if abbr and abbr in tgt:
+                continue
+            missing_drugs.add(d)
+        if missing_drugs:
+            reasons.append(f"Nghi mất tên thuốc (review): {sorted(missing_drugs)}")
+        return dose_score, missing_drugs, reasons
 
     # ---- chiều 2: độ tự nhiên / thật sự đã dịch ----
     def check_naturalness(self, src: str, tgt: str) -> tuple[float, list[str]]:
@@ -133,23 +159,25 @@ class QualityGate:
 
     # ---- tổng hợp ----
     def evaluate(self, src: dict, tgt: dict) -> GateResult:
-        term_s, term_r = self.check_terminology(
+        dose_score, missing_drugs, term_r = self.check_terminology(
             f"{src['question']} {src['cot']} {src['response']}",
             f"{tgt['question']} {tgt['cot']} {tgt['response']}",
         )
         nat_s, nat_r = self.check_naturalness(src["response"], tgt["response"])
         cot_s, cot_r = self.check_cot(src["cot"], tgt["cot"])
 
-        passed = (
-            term_s >= self.min_terminology
+        # base_pass: liều giữ đủ + tự nhiên + CoT ok. (thuốc nghi KHÔNG chặn ở đây)
+        base_pass = (
+            dose_score >= self.min_terminology
             and nat_s >= self.min_naturalness
             and cot_s >= self.min_cot
         )
-        has_dose = bool(_DOSE_RE.search(f"{src['cot']} {src['response']}"))
-        needs_human = has_dose and term_s < 1.0  # có liều + nghi ngờ thuật ngữ
+        # thuốc nghi mất + mọi thứ khác ổn -> đưa REVIEW (có thể do viết tắt hợp lệ)
+        needs_human = base_pass and bool(missing_drugs)
+        passed = base_pass and not missing_drugs   # kept chỉ khi hoàn toàn sạch
         return GateResult(
             passed=passed,
-            scores={"terminology": round(term_s, 3),
+            scores={"terminology": round(dose_score, 3),   # = mức giữ liều/số
                     "naturalness": round(nat_s, 3),
                     "cot": round(cot_s, 3)},
             reasons=term_r + nat_r + cot_r,
