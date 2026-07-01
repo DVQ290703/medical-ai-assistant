@@ -186,6 +186,10 @@ class QualityGate:
 
 
 # ============ Backend dịch (pluggable) ============
+class ContentFiltered(Exception):
+    """API từ chối vì content filter (invalid_prompt). Retry vô ích -> bỏ qua mẫu, không sập."""
+
+
 class Translator(ABC):
     last_usage: dict = {"in": 0, "out": 0}
 
@@ -319,7 +323,13 @@ class LLMTranslator(Translator):
                     self.last_usage["in"] += getattr(u, "prompt_tokens", 0) or 0
                     self.last_usage["out"] += getattr(u, "completion_tokens", 0) or 0
                 return resp.choices[0].message.content.strip()
-            except Exception as e:  # rate limit / lỗi mạng -> backoff rồi thử lại
+            except Exception as e:  # phân loại lỗi
+                msg = str(e)
+                code = getattr(e, "code", "") or ""
+                # content filter: retry vô ích (cùng prompt cùng bị từ chối) -> báo để BỎ QUA
+                if code == "invalid_prompt" or "invalid_prompt" in msg or "usage policy" in msg:
+                    raise ContentFiltered(msg) from e
+                # rate limit / lỗi mạng -> backoff rồi thử lại
                 last_err = e
                 time.sleep(2 ** attempt)
         raise RuntimeError(f"API thất bại sau {self.max_retries} lần: {last_err}")
@@ -371,6 +381,7 @@ def _save_state(path: Path, state: dict) -> None:
 def _final_stats(state: dict, total: int) -> dict:
     return {"total": total, "done": state["done"], "kept": state["kept"],
             "rejected": state["rejected"], "needs_human": state["needs_human"],
+            "filtered": state.get("filtered", 0),
             "tokens_today": state["tokens_today"]}
 
 
@@ -415,6 +426,7 @@ def translate_dataset(config_path: str, in_path: str, out_path: str,
     f_keep = open(out, "a", encoding="utf-8")
     f_rej = open(rej_path, "a", encoding="utf-8")
     f_hum = open(hum_path, "a", encoding="utf-8")
+    f_flt = open(out.with_suffix(".filtered.jsonl"), "a", encoding="utf-8")
     stopped = False
     try:
         for i in range(done, len(src_recs)):
@@ -426,7 +438,16 @@ def translate_dataset(config_path: str, in_path: str, out_path: str,
             rec = src_recs[i]
             if hasattr(translator, "reset_usage"):
                 translator.reset_usage()
-            tgt = translator.translate_record(rec)
+            try:
+                tgt = translator.translate_record(rec)
+            except ContentFiltered as e:
+                # mẫu bị content filter chặn -> ghi riêng, BỎ QUA, đi tiếp (không sập)
+                f_flt.write(json.dumps({**rec, "_filtered": str(e)[:200]},
+                                       ensure_ascii=False) + "\n"); f_flt.flush()
+                state["filtered"] = state.get("filtered", 0) + 1
+                state["done"] = i + 1
+                _save_state(state_path, state)
+                continue
             res = gate.evaluate(rec, tgt)
             row = json.dumps({**tgt, "_gate": res.scores, "_reasons": res.reasons},
                              ensure_ascii=False) + "\n"
@@ -443,7 +464,7 @@ def translate_dataset(config_path: str, in_path: str, out_path: str,
             state["done"] = i + 1
             _save_state(state_path, state)   # persist mỗi mẫu -> crash-safe
     finally:
-        f_keep.close(); f_rej.close(); f_hum.close()
+        f_keep.close(); f_rej.close(); f_hum.close(); f_flt.close()
 
     stats = _final_stats(state, len(src_recs))
     stats["stopped_at_budget"] = stopped
@@ -460,6 +481,7 @@ def _write_report(path, state, budget, total):
              f"- kept: {state['kept']}",
              f"- rejected: {state['rejected']}",
              f"- needs_human (có liều + nghi ngờ): {state['needs_human']}",
+             f"- filtered (content filter chặn): {state.get('filtered', 0)}",
              f"- tokens_today: {state['tokens_today']:,} / budget {budget:,}\n",
              "Chi tiết mẫu bị loại / cần review tay:",
              "- `<out>.rejected.jsonl`",
