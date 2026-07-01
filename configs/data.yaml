@@ -8,7 +8,7 @@ seed_dataset:
   version: v1
 translation:
   enabled: true
-  engine: TODO            # MT (NLLB/Google) + review thuật ngữ y khoa bắt buộc
+  engine: nllb            # MT (NLLB/Google) + review thuật ngữ y khoa bắt buộc
   quality_gate: true      # loại bản dịch hỏng thuật ngữ (xem src/data/translate.py)
 vietnamese_native:
   forums: []              # TODO: nguồn Q&A y khoa VN (check license)
