@@ -1,0 +1,15 @@
+# Phase 2 — QLoRA (Unsloth) config
+# Base model: default Llama 3.1 8B (đa ngôn ngữ, kiến thức y khoa mạnh từ corpus EN).
+# Modern medicine ít Hán-Việt -> lợi thế Qwen (priors Trung) yếu đi -> Llama là ứng viên #1.
+# PHẢI benchmark trước khi chốt -> xem ADR-0005.
+base_model: unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit
+base_model_candidates:            # benchmark trên golden set VN rồi mới chốt (ADR-0005)
+  - unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit
+  - unsloth/Qwen2.5-7B-Instruct-bnb-4bit
+  - Viet-Mistral/Vistral-7B-Chat
+max_seq_length: 2048
+load_in_4bit: true
+lora: { r: 16, alpha: 16, dropout: 0.0,
+        target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj] }
+train: { lr: 2.0e-4, epochs: 1, batch_size: 2, grad_accum: 4,
+         warmup_ratio: 0.03, seed: 3407, gradient_checkpointing: unsloth }

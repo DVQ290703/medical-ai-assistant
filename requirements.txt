@@ -1,0 +1,22 @@
+# ---- Core: chạy được M1 (data + translate) trên Kaggle ----
+datasets>=2.19
+transformers>=4.44
+pyyaml>=6.0
+pydantic>=2.7
+
+# ---- Data pipeline (Phase 1) ----
+presidio-analyzer>=2.2
+presidio-anonymizer>=2.2
+great-expectations>=0.18
+sentencepiece>=0.2          # cần cho tokenizer NLLB
+sacremoses>=0.1             # NLLB/MT tokenization
+
+# ---- Tracking / versioning ----
+mlflow>=2.14
+wandb>=0.17
+dvc>=3.51
+
+# NOTE: training / serving / eval nặng -> để file riêng, cài khi cần:
+#   pip install -r requirements-train.txt
+#   pip install -r requirements-serve.txt
+#   pip install -r requirements-eval.txt

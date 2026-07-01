@@ -1,0 +1,6 @@
+# Phase 4 — serving config
+host: 0.0.0.0
+port: 8000
+rate_limit: { per_minute: 30, per_day: 500 }   # chống abuse/DoS
+engine: vllm                                    # Kaggle: fallback transformers.generate
+cache: { backend: redis, ttl_s: 3600 }          # mock trên Kaggle

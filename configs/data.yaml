@@ -1,0 +1,24 @@
+# Phase 1 — data pipeline config (TIẾNG VIỆT, y hiện đại)
+# Không có sẵn dataset reasoning y khoa tiếng Việt -> hybrid:
+#   (a) dịch medical-o1 (EN) lấy khung reasoning làm seed
+#   (b) augment bằng Q&A forum y khoa VN + distill từ sách/phác đồ VN
+seed_dataset:
+  source: FreedomIntelligence/medical-o1-reasoning-SFT   # Apache-2.0 (commercial OK)
+  config: en
+  version: v1
+translation:
+  enabled: true
+  engine: TODO            # MT (NLLB/Google) + review thuật ngữ y khoa bắt buộc
+  quality_gate: true      # loại bản dịch hỏng thuật ngữ (xem src/data/translate.py)
+vietnamese_native:
+  forums: []              # TODO: nguồn Q&A y khoa VN (check license)
+  textbooks: []           # TODO: sách giáo khoa / phác đồ VN
+decontamination:
+  enabled: true           # dedup train vs eval (VM14K, MedQA) — xem src/data/decontaminate.py
+  against: [vm14k, medqa]
+split: { train: 0.9, val: 0.05, test: 0.05, seed: 42 }
+validation:
+  max_tokens: 4096
+  require_fields: [question, answer]
+  drop_empty_answer: true
+  language_check: vi      # cảnh báo mẫu không phải tiếng Việt sau khi dịch

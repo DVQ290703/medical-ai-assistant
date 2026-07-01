@@ -1,0 +1,19 @@
+# Knowledge plane config (TIẾNG VIỆT)
+# LƯU Ý: bge-large-EN KHÔNG ăn tiếng Việt -> retrieval hỏng. Phải dùng embedding đa ngữ.
+embedding:
+  model: BAAI/bge-m3               # đa ngữ, tốt cho VN. Ứng viên khác: intfloat/multilingual-e5-large
+  candidates: [BAAI/bge-m3, intfloat/multilingual-e5-large]   # benchmark -> ADR-0003
+chunk: { size: 512, overlap: 64, strategy: recursive }        # ADR-0002
+retriever: { top_k: 8 }
+reranker: { model: BAAI/bge-reranker-v2-m3, top_n: 4 }         # reranker đa ngữ (không dùng bản -en)
+vectorstore: { backend: faiss }
+sources_versioned: true           # tránh Temporal Error
+
+# Nguồn tri thức y HIỆN ĐẠI tiếng Việt (facts qua RAG, không qua weights)
+knowledge_sources:
+  - Hướng dẫn/phác đồ điều trị Bộ Y tế
+  - Dược thư Quốc gia Việt Nam (tra thuốc/liều)
+  - Phác đồ bệnh viện lớn (Chợ Rẫy, Bạch Mai, ...)
+  - Sách giáo khoa trường Y VN
+  - MSD Manual bản tiếng Việt
+  # TODO: check license/điều khoản sử dụng từng nguồn trước khi index

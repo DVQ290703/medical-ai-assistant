@@ -1,0 +1,42 @@
+[project]
+name = "medical-ai-assistant"
+version = "0.1.0"
+description = "Medical Q&A assistant: Llama 3.1 8B QLoRA (Unsloth) + RAG, production-style."
+requires-python = ">=3.10"
+dependencies = [
+    # training
+    "unsloth",
+    "peft",
+    "bitsandbytes",
+    "trl",
+    "transformers",
+    "datasets",
+    # rag / knowledge
+    "faiss-cpu",
+    "sentence-transformers",
+    # serving
+    "fastapi",
+    "uvicorn",
+    "vllm",              # serving thật; trên Kaggle có thể skip, dùng transformers generate
+    # eval
+    "ragas",
+    "bert-score",
+    "scikit-learn",
+    "scipy",
+    # data
+    "presidio-analyzer",
+    "presidio-anonymizer",
+    "great-expectations",
+    # tracking / infra
+    "mlflow",
+    "wandb",
+    "dvc",
+    "pydantic",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.ruff]
+line-length = 100

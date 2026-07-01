@@ -1,0 +1,17 @@
+# heavy / generated — DVC-tracked, never in git
+data/
+artifacts/
+*.pt
+*.bin
+*.safetensors
+*.gguf
+*.faiss
+# python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+# secrets / local
+.env
+wandb/
+mlruns/

@@ -1,0 +1,10 @@
+# Phase 3 — reproduce toàn bộ eval bằng 1 file (TIẾNG VIỆT)
+evaluation_version: 1.0.0
+dataset: [vm14k_v1, drug_safety_vi_v1, emergency_vi_v1, retrieval_vi_v1]  # VM14K là benchmark VN chính
+benchmark_secondary: [medqa_translated_v1]   # đối chiếu, kèm caveat dịch thuật
+retriever: bge-m3
+generator: llama3.1-8b-qlora-r16   # chốt sau ADR-0005
+prompt: v1
+seeds: [42, 3407, 1234]
+mcq_option_shuffle: true           # chống positional bias (thiên option B)
+metrics: [accuracy, faithfulness, answer_relevance, recall@5, mrr, hallucination_rate]

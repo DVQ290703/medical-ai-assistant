@@ -1,0 +1,7 @@
+# Runtime generation params (KHÔNG hardcode trong code)
+prompt_version: v1              # trỏ tới prompts/system_prompt_v1.txt
+temperature: 0.2
+top_p: 0.9
+max_tokens: 1024
+citation_required: true
+refuse_out_of_scope: true

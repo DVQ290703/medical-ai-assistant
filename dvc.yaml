@@ -1,0 +1,14 @@
+# Reproducible pipeline. `dvc repro` chạy tuần tự, cache theo dep/out.
+stages:
+  data:
+    cmd: bash scripts/build_data.sh
+    deps: [src/data, configs/data.yaml]
+    outs: [data/processed]
+  train:
+    cmd: bash scripts/train.sh
+    deps: [src/training, data/processed, configs/training/qlora_r16.yaml, prompts]
+    outs: [artifacts/adapters]
+  eval:
+    cmd: bash scripts/evaluate.sh
+    deps: [src/evaluation, artifacts/adapters, evaluation_sets, configs/evaluation_manifest.yaml]
+    outs: [reports]
