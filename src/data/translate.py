@@ -36,24 +36,23 @@ _DOSE_RE = re.compile(
     r"\b\d+(?:[.,]\d+)?\s?(?:mg/kg|mcg|mg|g|kg|ml|l|iu|mmol|mmhg|%|units?)\b",
     re.IGNORECASE,
 )
-# ---- token thuốc: chữ hoa Latin không đứng đầu câu (Warfarin, Metformin...) ----
-# LƯU Ý: regex hậu tố là PROXY thô -> bắt nhầm từ thường (Calculate, State...) và
-# hormone/chất mà bản dịch có quyền viết tắt (Triiodothyronine -> T3). Production nên
-# thay bằng từ điển thuốc thật (Dược thư/RxNorm). Tạm thời: blacklist + coi thuốc mất
-# là "nghi ngờ" (review) chứ không loại thẳng.
-_DRUG_RE = re.compile(r"(?<![.\n]\s)(?<!^)\b[A-Z][a-z]{3,}(?:in|ol|ine|ide|one|am|il|ate)\b")
-
-# từ tiếng Anh thường khớp nhầm pattern trên -> loại khỏi danh sách "tên thuốc"
-_DRUG_BLACKLIST = {
-    "Calculate", "Evaluate", "Estimate", "Indicate", "Update", "State", "Rate",
-    "Given", "Determine", "Consider", "Baseline", "Guideline", "Timeline",
-    "Outcome", "Response", "Disease", "Increase", "Decrease", "Release",
-    "Female", "Routine", "Machine", "Combine", "Examine", "Medicine",
-}
-# hormone/chất thường được viết tắt hợp lệ khi dịch (không coi là "mất" nếu có viết tắt)
-_HORMONE_ABBR = {
-    "Thyroxine": "T4", "Triiodothyronine": "T3",
-    "Thyrotropin": "TSH", "Cortisol": "cortisol",
+# ---- tên thuốc: WHITELIST thuốc THẬT (so khớp không phân biệt hoa/thường) ----
+# Bài học từ probe 500: regex hậu tố (-in/-ol/-ate...) bắt nhầm HÀNG LOẠT từ tiếng Anh thường
+# (Borderline, Control, Protein, Program...) -> 177 mẫu oan. Whitelist chỉ cờ thuốc thật.
+# Chưa đủ? Bổ sung dần / thay bằng Dược thư-RxNorm. Thiếu 1 thuốc = bỏ sót 1 (chấp nhận được),
+# còn hơn loại oan hàng trăm mẫu tốt.
+_DRUG_WHITELIST = {
+    "warfarin", "heparin", "aspirin", "metformin", "insulin", "lisinopril", "losartan",
+    "bosentan", "tolvaptan", "dapsone", "eszopiclone", "zolpidem", "diazepam", "lorazepam",
+    "phenytoin", "carbamazepine", "valproate", "lithium", "haloperidol", "clozapine",
+    "risperidone", "fluoxetine", "sertraline", "amoxicillin", "penicillin", "ceftriaxone",
+    "azithromycin", "ciprofloxacin", "vancomycin", "gentamicin", "rifampicin", "isoniazid",
+    "ethambutol", "pyrazinamide", "prednisone", "prednisolone", "dexamethasone",
+    "hydrocortisone", "furosemide", "spironolactone", "amlodipine", "atenolol", "propranolol",
+    "digoxin", "atorvastatin", "simvastatin", "omeprazole", "ranitidine", "levothyroxine",
+    "methotrexate", "cyclophosphamide", "cisplatin", "doxorubicin", "morphine", "fentanyl",
+    "naloxone", "adrenaline", "epinephrine", "atropine", "salbutamol", "paracetamol",
+    "ibuprofen", "acetaminophen", "clopidogrel", "enoxaparin", "nitroglycerin",
 }
 
 
@@ -85,9 +84,9 @@ class QualityGate:
     def check_terminology(self, src: str, tgt: str) -> tuple[float, set, list[str]]:
         """Trả (dose_score, missing_drugs, reasons).
 
-        - dose_score: tỷ lệ liều/số được giữ (LOẠI CỨNG nếu <1 vì rớt liều là nguy hiểm).
-        - missing_drugs: tên thuốc nghi bị mất -> chỉ đưa REVIEW, không loại (có thể do
-          viết tắt hợp lệ như Triiodothyronine->T3, hoặc regex bắt nhầm từ thường).
+        - dose_score: tỷ lệ liều/số được giữ (LOẠI CỨNG nếu <1 — rớt liều là nguy hiểm).
+        - missing_drugs: thuốc trong WHITELIST có ở nguồn nhưng mất ở bản dịch (không phân
+          biệt hoa/thường) -> chỉ REVIEW, không loại.
         """
         reasons = []
         # --- liều/số (an toàn, loại cứng) ---
@@ -98,16 +97,9 @@ class QualityGate:
         if missing_dose:
             reasons.append(f"MẤT liều/số (loại): {sorted(missing_dose)}")
 
-        # --- tên thuốc (chỉ nghi ngờ) ---
-        src_drugs = {d for d in _DRUG_RE.findall(src) if d not in _DRUG_BLACKLIST}
-        missing_drugs = set()
-        for d in src_drugs:
-            if d in tgt:
-                continue
-            abbr = _HORMONE_ABBR.get(d)          # chấp nhận viết tắt hợp lệ (T3/T4/TSH...)
-            if abbr and abbr in tgt:
-                continue
-            missing_drugs.add(d)
+        # --- tên thuốc: chỉ thuốc THẬT trong whitelist, so khớp không phân biệt hoa/thường ---
+        src_low, tgt_low = src.lower(), tgt.lower()
+        missing_drugs = {d for d in _DRUG_WHITELIST if d in src_low and d not in tgt_low}
         if missing_drugs:
             reasons.append(f"Nghi mất tên thuốc (review): {sorted(missing_drugs)}")
         return dose_score, missing_drugs, reasons
@@ -117,44 +109,42 @@ class QualityGate:
         reasons = []
         if not tgt.strip():
             return 0.0, ["bản dịch rỗng"]
-        vi_ratio = sum(c in _VI_CHARS for c in tgt) / max(len(tgt), 1)
-        # gần trùng nguyên văn tiếng Anh -> chưa dịch
         same = tgt.strip().lower() == src.strip().lower()
         len_ratio = len(tgt) / max(len(src), 1)
         score = 1.0
-        if same:
-            score = 0.0
-            reasons.append("gần như GIỮ NGUYÊN tiếng Anh (chưa dịch)")
-        elif vi_ratio < 0.02:
-            score = 0.3
-            reasons.append(f"rất ít ký tự tiếng Việt (vi_ratio={vi_ratio:.3f})")
-        if not (0.5 <= len_ratio <= 2.2):
-            score = min(score, 0.4)
+        # "chưa dịch" chỉ tính khi response ĐỦ DÀI (đáp án MCQ ngắn như 'D. Mononucleosis'
+        # trùng EN/VI là bình thường -> để khâu MCQ ở validate xử lý, không loại ở đây)
+        if same and len(tgt) >= 40:
+            return 0.0, ["gần như GIỮ NGUYÊN tiếng Anh (chưa dịch)"]
+        if len(tgt) >= 40:
+            vi_ratio = sum(c in _VI_CHARS for c in tgt) / max(len(tgt), 1)
+            if vi_ratio < 0.03:
+                score = 0.3
+                reasons.append(f"response dài nhưng rất ít tiếng Việt (vi_ratio={vi_ratio:.3f})")
+        if not (0.4 <= len_ratio <= 2.5):
+            score = min(score, 0.5)
             reasons.append(f"độ dài lệch bất thường (len_ratio={len_ratio:.2f})")
         return score, reasons
 
-    # ---- chiều 3: cấu trúc CoT (nghiêm nhất) ----
-    @staticmethod
-    def _n_sent(s: str) -> int:
-        return len([x for x in re.split(r"[.!?…]\s", s) if x.strip()])
-
+    # ---- chiều 3: cấu trúc CoT (dùng ĐỘ DÀI, KHÔNG đếm câu) ----
     def check_cot(self, src_cot: str, tgt_cot: str) -> tuple[float, list[str]]:
+        """Bài học probe 500: đếm câu Anh/Việt SAI (hai ngôn ngữ ngắt câu khác nhau -> 336
+        mẫu 'co cụt' oan). Dùng TỶ LỆ ĐỘ DÀI: cụt thật thì ngắn hẳn. Cắt-cụt-cuối chỉ nhắc nhẹ.
+        """
         reasons = []
         if not src_cot.strip():
-            return 1.0, reasons  # mẫu không có CoT
+            return 1.0, reasons
         if not tgt_cot.strip():
             return 0.0, ["CoT bị mất hoàn toàn"]
-        ns, nt = self._n_sent(src_cot), self._n_sent(tgt_cot)
-        ratio = nt / max(ns, 1)
-        # cắt cụt: kết thúc giữa chừng
-        truncated = not tgt_cot.rstrip().endswith((".", "!", "?", "…", ":", ")"))
+        len_ratio = len(tgt_cot) / max(len(src_cot), 1)
         score = 1.0
-        if ratio < 0.6:
-            score = 0.4
-            reasons.append(f"CoT co cụt ({nt}/{ns} câu)")
-        if truncated:
-            score = min(score, 0.5)
-            reasons.append("CoT có vẻ bị CẮT CỤT")
+        if len_ratio < 0.4:                 # ngắn bất thường -> dịch thiếu/cụt (loại)
+            score = 0.3
+            reasons.append(f"CoT ngắn bất thường (len_ratio={len_ratio:.2f})")
+        # kết thúc giữa chừng -> nhắc nhẹ, KHÔNG tự loại (0.7 vẫn qua ngưỡng 0.6)
+        if not tgt_cot.rstrip().endswith((".", "!", "?", "…", ":", ")", "%", "'", '"', "”")):
+            score = min(score, 0.7)
+            reasons.append("CoT có thể bị cắt cuối (nhắc)")
         return score, reasons
 
     # ---- tổng hợp ----
