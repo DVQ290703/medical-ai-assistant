@@ -32,8 +32,10 @@ import yaml
 _VI_CHARS = set("ăâđêôơưàảãáạằẳẵắặầẩẫấậèẻẽéẹềểễếệìỉĩíịòỏõóọồổỗốộờởỡớợùủũúụừửữứựỳỷỹýỵ"
                 "ĂÂĐÊÔƠƯ")
 # ---- liều/số + đơn vị (giữ nguyên khi dịch) ----
+# BỎ 'units'/'iu': chúng dịch thành 'đơn vị' nên số vẫn còn mà token 'Xunits' biến mất
+# -> false positive hàng loạt (5 units -> 5 đơn vị). Số vẫn được giữ trong text tiếng Việt.
 _DOSE_RE = re.compile(
-    r"\b\d+(?:[.,]\d+)?\s?(?:mg/kg|mcg|mg|g|kg|ml|l|iu|mmol|mmhg|%|units?)\b",
+    r"\b\d+(?:[.,]\d+)?\s?(?:mg/kg|mcg|mg|kg|ml|mmol|mmhg|%)\b",
     re.IGNORECASE,
 )
 # ---- tên thuốc: WHITELIST thuốc THẬT (so khớp không phân biệt hoa/thường) ----

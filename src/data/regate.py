@@ -58,10 +58,14 @@ def redecide(rec: dict) -> tuple[list, list]:
                     blocking.append(r)
         elif "tên thuốc" in r:          # bắt cả "Nghi mất tên thuốc" (mới) và "MẤT tên thuốc" (cũ)
             drugs = re.findall(r"'([^']+)'", r)
-            real = sorted(d for d in drugs if d.lower() in _DRUG_WHITELIST)
+            vi_text = f"{rec.get('question','')} {rec.get('cot','')} {rec.get('response','')}".lower()
+            # CHỈ giữ nếu (a) là thuốc thật trong whitelist VÀ (b) thật sự vắng khỏi bản dịch VI
+            # (gate cũ phân biệt hoa/thường -> Insulin/insulin báo nhầm; kiểm lại ở đây)
+            real = sorted(d for d in drugs
+                          if d.lower() in _DRUG_WHITELIST and d.lower() not in vi_text)
             if real:
                 review.append(f"Nghi mất tên thuốc (review): {real}")
-            # thuốc "giả" (từ thường / hormone viết tắt) -> bỏ
+            # thuốc "giả" (từ thường) hoặc thật-mà-vẫn-có-trong-bản-dịch -> bỏ
         else:
             review.append(r)                                # lý do lạ -> để review cho an toàn
     return blocking, review
