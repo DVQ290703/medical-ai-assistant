@@ -3,6 +3,7 @@ datasets>=2.19
 transformers>=4.44
 pyyaml>=6.0
 pydantic>=2.7
+python-dotenv>=1.0        # nạp HF_TOKEN... từ .env khi chạy local
 
 # ---- Data pipeline (Phase 1) ----
 presidio-analyzer>=2.2
@@ -10,6 +11,13 @@ presidio-anonymizer>=2.2
 great-expectations>=0.18
 sentencepiece>=0.2          # cần cho tokenizer NLLB
 sacremoses>=0.1             # NLLB/MT tokenization
+
+# ---- Knowledge plane / RAG (embed + index) ----
+# LƯU Ý: FlagEmbedding + qdrant-client trước đây chỉ ghi trong docstring, nay khai báo.
+FlagEmbedding>=1.2         # BGE-M3 hybrid dense+sparse
+qdrant-client>=1.10        # vector DB hybrid (dense+sparse) + RRF fusion
+pymupdf>=1.24              # parse PDF phác đồ Bộ Y tế (kcb.vn); import tên `fitz`
+langchain-text-splitters>=0.2   # RecursiveCharacterTextSplitter cho chunk article dài
 
 # ---- Tracking / versioning ----
 mlflow>=2.14

@@ -3,17 +3,77 @@
 embedding:
   model: BAAI/bge-m3               # đa ngữ, tốt cho VN. Ứng viên khác: intfloat/multilingual-e5-large
   candidates: [BAAI/bge-m3, intfloat/multilingual-e5-large]   # benchmark -> ADR-0003
-chunk: { size: 512, overlap: 64, strategy: recursive }        # ADR-0002
+  dense_dim: 1024                  # BGE-M3 dense
+  use_fp16: true                   # GPU: nhanh + đỡ VRAM
+  device: cuda                     # "cuda" | "cpu"
+  # GPU 4GB (RTX 2050): batch nhỏ + max_length ngắn để không OOM. Tăng nếu VRAM lớn hơn.
+  batch_size: 4
+  max_length: 1024                 # chunk ~768 tok + Q&A hầu hết < 1024; đủ, đỡ VRAM
+chunk: { size: 768, overlap: 96, min_size: 256, strategy: structure-aware }  # ADR-0002; overlap 12.5%; min_size gom chunk vụn; BGE-M3 ăn 8k tok
 retriever: { top_k: 8 }
 reranker: { model: BAAI/bge-reranker-v2-m3, top_n: 4 }         # reranker đa ngữ (không dùng bản -en)
-vectorstore: { backend: faiss }
+# Qdrant thay FAISS: BGE-M3 sinh hybrid dense+sparse; Qdrant index cả hai +
+# RRF fusion natively. FAISS không có sparse gốc -> phải tự ghép BM25. (đổi từ ADR cũ)
+vectorstore:
+  backend: qdrant
+  host: localhost
+  port: 6333
 sources_versioned: true           # tránh Temporal Error
 
-# Nguồn tri thức y HIỆN ĐẠI tiếng Việt (facts qua RAG, không qua weights)
-knowledge_sources:
-  - Hướng dẫn/phác đồ điều trị Bộ Y tế
-  - Dược thư Quốc gia Việt Nam (tra thuốc/liều)
-  - Phác đồ bệnh viện lớn (Chợ Rẫy, Bạch Mai, ...)
-  - Sách giáo khoa trường Y VN
-  - MSD Manual bản tiếng Việt
-  # TODO: check license/điều khoản sử dụng từng nguồn trước khi index
+# Corpus nạp vào RAG (tách khỏi seed training ở configs/data.yaml).
+# vinmec-medical-qa: GATED trên HF -> cần bấm "Agree and access repository" +
+# có HF_TOKEN (quyền read). Chạy nơi có internet (Kaggle). Xem src/knowledge/ingest.py.
+corpus:
+  - id: vinmec-medical-qa
+    source: phuocsang/vinmec-medical-qa
+    split: train
+    gated: true
+    # schema thật: question / answer / url. url toàn None -> bỏ qua.
+    field_map: { question: question, answer: answer }
+    out: data/raw/vinmec.jsonl
+
+# Q&A bổ sung, GỘP THÊM vào corpus Q&A trên (dedup theo answer-fingerprint).
+# Đo thực tế: trùng chéo với phuocsang ~0%, tự trùng nội bộ ~3.4%. Xem qa_ingest.py.
+qa_extra:
+  - id: vn-healthcare-qa
+    type: hf
+    source: urnus11/Vietnamese-Healthcare
+    split: medical_qa
+    gated: true
+    # schema nguồn: url / title / content -> title=câu hỏi (tiêu đề), content=trả lời
+    field_map: { question: title, answer: content, url: url }
+    merge_into: data/raw/vinmec.jsonl        # gộp vào corpus Q&A hiện có
+    dedup_against: data/raw/vinmec.jsonl
+
+# Tri thức nền y khoa hiện đại tiếng Việt (article/phác đồ DÀI -> chunk).
+# CHỈ index nguồn có license OK — xem governance/knowledge_sources_license.md.
+knowledge_base:
+  # (a) bài viết bệnh/thuốc Vinmec — HF, tải 1 phát. Chỉ split article_main (138k).
+  - id: vn-healthcare-article
+    type: hf
+    source: urnus11/Vietnamese-Healthcare
+    split: vinmec_article_main
+    gated: true
+    field_map: { title: title, text: content, url: url }
+    chunk: true
+    source_tag: vinmec-article
+    out: data/raw/kb/vn_healthcare.jsonl
+  # (b) phác đồ Bộ Y tế — PDF tải từ kcb.vn (văn bản nhà nước, không bị bảo hộ).
+  - id: byt-kcb
+    type: pdf
+    input_dir: data/raw/kb/pdf          # kb_fetch.py tải PDF về đây
+    chunk: true
+    source_tag: byt-kcb
+    out: data/raw/kb/byt_kcb.jsonl
+
+# Nguồn CHƯA index (bản quyền / cần xin phép) — xem governance/knowledge_sources_license.md:
+#   - Dược thư Quốc gia VN (© NIDQC, thương mại)
+#   - MSD Manual tiếng Việt (© Merck, cần xin phép)
+#   - Phác đồ BV lớn (Chợ Rẫy, Bạch Mai — sách bản quyền)
+#   - Sách giáo khoa trường Y VN (© NXB Y học)
+
+# Ngưỡng phát hiện PDF scan (không trích được text -> cần OCR, bỏ qua).
+pdf: { min_chars_per_page: 100 }
+
+# Collection Qdrant cho tri thức nền (tách khỏi 2 collection Q&A vinmec_q/vinmec_qa).
+kb_collection: vinmec_kb
