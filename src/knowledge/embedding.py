@@ -31,6 +31,19 @@ import os
 from dataclasses import dataclass, field
 
 import yaml
+
+# LƯU Ý THỨ TỰ IMPORT (Windows): import torch + FlagEmbedding TRƯỚC qdrant_client.
+# Nếu qdrant_client (kéo theo native lib của nó) nạp trước FlagEmbedding, tiến trình
+# crash cứng không traceback khi sau đó import FlagEmbedding. Đã xác minh: nạp
+# torch -> FlagEmbedding trước thì không crash. Giữ đúng thứ tự này.
+try:
+    import torch  # noqa: F401  (ép nạp torch runtime trước)
+    from FlagEmbedding import BGEM3FlagModel  # noqa: F401
+    _FLAG_IMPORT_ERR = None
+except Exception as _e:  # môi trường chưa cài (vd chỉ chạy test config) -> hoãn báo lỗi
+    BGEM3FlagModel = None
+    _FLAG_IMPORT_ERR = _e
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, SparseVectorParams, SparseVector, PointStruct,
@@ -266,10 +279,12 @@ def load_chunks(paths: list[str]) -> list[dict]:
 # BUILD INDEX
 # ============================================================
 
-def build_index(collections: list[str] | None = None, cfg: EmbedConfig | None = None):
+def build_index(collections: list[str] | None = None, cfg: EmbedConfig | None = None,
+                limit: int | None = None):
     """
     Embed + index. collections: ['q','qa'] hoặc None (cả hai). Resume tự động.
     Nếu corpus đổi (size/mtime khác state) -> cảnh báo & reset count để index lại.
+    limit: chỉ embed N record đầu (test nhỏ).
     """
     cfg = cfg or config_from_yaml()
 
@@ -278,11 +293,15 @@ def build_index(collections: list[str] | None = None, cfg: EmbedConfig | None = 
                else [alias.get(c, c) for c in collections])
 
     rows = load_corpus(cfg.corpus_path)
+    if limit:
+        rows = rows[:limit]
+        print(f"[limit] chỉ embed {len(rows):,} record đầu.")
 
     # Kết nối Qdrant TRƯỚC khi load model (4.5GB) -> fail sớm nếu Qdrant chưa chạy.
     client = _connect_qdrant(cfg)
 
-    from FlagEmbedding import BGEM3FlagModel  # import trong hàm: module nhẹ khi chỉ import
+    if BGEM3FlagModel is None:
+        raise SystemExit(f"Không import được FlagEmbedding/torch: {_FLAG_IMPORT_ERR}")
     print(f"[model] Load {cfg.model_name} trên {cfg.device} (fp16={cfg.use_fp16})...")
     model = BGEM3FlagModel(cfg.model_name, use_fp16=cfg.use_fp16, devices=cfg.device)
 
@@ -330,7 +349,7 @@ def build_index(collections: list[str] | None = None, cfg: EmbedConfig | None = 
         print(f"  {coll}: {info.points_count:,} points")
 
 
-def build_kb_index(cfg: EmbedConfig | None = None):
+def build_kb_index(cfg: EmbedConfig | None = None, limit: int | None = None):
     """Embed TRI THỨC NỀN (chunk article/PDF) -> collection kb. Resume theo số chunk đã index.
 
     Field embed = text (đã gồm heading nhờ chunk.py). Payload mang title/url/section để
@@ -345,12 +364,16 @@ def build_kb_index(cfg: EmbedConfig | None = None):
     rows = load_chunks(cfg.kb_chunk_paths)
     if not rows:
         raise SystemExit("Không có chunk nào để index.")
+    if limit:
+        rows = rows[:limit]
+        print(f"[limit] chỉ embed {len(rows):,} chunk đầu.")
 
     # Kết nối Qdrant TRƯỚC khi load model (4.5GB) -> fail sớm nếu Qdrant chưa chạy.
     client = _connect_qdrant(cfg)
     ensure_collection(client, coll, cfg.dense_dim)
 
-    from FlagEmbedding import BGEM3FlagModel
+    if BGEM3FlagModel is None:
+        raise SystemExit(f"Không import được FlagEmbedding/torch: {_FLAG_IMPORT_ERR}")
     print(f"[model] Load {cfg.model_name} trên {cfg.device} (fp16={cfg.use_fp16})...")
     model = BGEM3FlagModel(cfg.model_name, use_fp16=cfg.use_fp16, devices=cfg.device)
 
@@ -392,15 +415,17 @@ def main() -> None:
     ap.add_argument("--config", default="configs/rag.yaml")
     ap.add_argument("--collections", nargs="*", default=None,
                     help="q, qa (Q&A) và/hoặc kb (tri thức nền). Mặc định: cả hai Q&A.")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="chỉ embed N record đầu (test nhỏ trước khi chạy full)")
     args = ap.parse_args()
     cfg = config_from_yaml(args.config)
 
     cols = args.collections
     if cols and "kb" in cols:
-        build_kb_index(cfg=cfg)
+        build_kb_index(cfg=cfg, limit=args.limit)
         cols = [c for c in cols if c != "kb"]        # phần còn lại (nếu có) là Q&A
     if cols or not args.collections:
-        build_index(collections=cols or None, cfg=cfg)
+        build_index(collections=cols or None, cfg=cfg, limit=args.limit)
 
 
 if __name__ == "__main__":

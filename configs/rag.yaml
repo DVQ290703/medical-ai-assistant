@@ -10,8 +10,22 @@ embedding:
   batch_size: 4
   max_length: 1024                 # chunk ~768 tok + Q&A hầu hết < 1024; đủ, đỡ VRAM
 chunk: { size: 768, overlap: 96, min_size: 256, strategy: structure-aware }  # ADR-0002; overlap 12.5%; min_size gom chunk vụn; BGE-M3 ăn 8k tok
-retriever: { top_k: 8 }
-reranker: { model: BAAI/bge-reranker-v2-m3, top_n: 4 }         # reranker đa ngữ (không dùng bản -en)
+# Retriever: hybrid (dense+sparse RRF) -> rerank -> source priority -> threshold.
+# collections: BỎ vinmec_q (trùng data qa). query_device: cpu (encode 1 query nhẹ, GPU 4GB
+# không đủ cho BGE-M3 nhưng CPU chịu được 1 câu ~1-2s).
+retriever:
+  top_k: 8                          # số candidate lấy TỪ MỖI collection (trước rerank)
+  top_n: 4                          # số chunk cuối trả về (sau rerank)
+  min_score: 0.0                    # ngưỡng rerank; <ngưỡng -> loại. Calibrate bằng query thật.
+  collections: [vinmec_kb, vinmec_qa]
+  query_device: cpu                 # "cpu" | "cuda"
+reranker:
+  model: BAAI/bge-reranker-v2-m3    # reranker đa ngữ (không dùng bản -en)
+  top_n: 4
+  device: cpu                       # rerank ~16 candidate -> CPU đủ
+  use_fp16: false                   # fp16 chỉ lợi trên GPU
+# Ưu tiên nguồn uy tín khi điểm rerank SÁT nhau (bonus nhỏ tie-break, không lấn át relevance).
+source_priority: { byt-kcb: 2, vinmec-article: 1 }
 # Qdrant thay FAISS: BGE-M3 sinh hybrid dense+sparse; Qdrant index cả hai +
 # RRF fusion natively. FAISS không có sparse gốc -> phải tự ghép BM25. (đổi từ ADR cũ)
 vectorstore:
