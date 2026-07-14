@@ -4,3 +4,20 @@ port: 8000
 rate_limit: { per_minute: 30, per_day: 500 }   # chống abuse/DoS
 engine: vllm                                    # Kaggle: fallback transformers.generate
 cache: { backend: redis, ttl_s: 3600 }          # mock trên Kaggle
+
+# Generation: sinh câu trả lời từ context RAG. Backend LINH HOẠT:
+#   - groq : gọi API (chạy ngay, không cần GPU) — dùng khi model fine-tune chưa xong
+#   - local: transformers/unsloth (cần GPU khỏe + adapter) — deploy sau
+generation:
+  backend: groq
+  model: llama-3.3-70b-versatile     # model trên Groq (đổi dễ nếu Groq đổi tên)
+  temperature: 0.2                   # y khoa -> thấp, bám context, ít bịa
+  max_tokens: 1024
+  api_key_env: GROQ_API_KEY          # đọc token từ .env
+  timeout_s: 60
+  # local backend (khi có GPU + adapter fine-tune):
+  local_model: unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit
+  adapter_path: artifacts/adapters   # LoRA nếu có (rỗng -> base model)
+  system_prompt: prompts/system_prompt_v1.txt
+
+citation_required: true              # câu trả lời phải trích [số] nguồn
