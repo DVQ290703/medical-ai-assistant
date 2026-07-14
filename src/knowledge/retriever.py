@@ -26,6 +26,15 @@ from dataclasses import dataclass
 
 import yaml
 
+# THỨ TỰ IMPORT (Windows): nạp torch + FlagEmbedding TRƯỚC qdrant_client (qua vectorstore).
+# Nếu qdrant nạp native lib trước, tiến trình crash cứng không traceback khi sau đó import
+# FlagEmbedding. Đã gặp bug này ở embedding.py -> giữ đúng thứ tự.
+try:
+    import torch  # noqa: F401
+    from FlagEmbedding import BGEM3FlagModel  # noqa: F401
+except Exception:
+    pass
+
 from src.knowledge.vectorstore import connect, hybrid_search_multi
 from src.knowledge.reranker import Reranker
 
@@ -97,12 +106,18 @@ def config_from_yaml(path: str = CONFIG_PATH) -> RetrieverConfig:
     return c
 
 
+def _near_dup_key(text: str, n: int = 80) -> str:
+    """Chữ ký thô để nhận near-duplicate: n ký tự đầu đã chuẩn hoá khoảng trắng."""
+    return " ".join((text or "").split())[:n].lower()
+
+
 def rank_candidates(cands, rerank_scores, source_priority: dict,
                     min_score: float, top_n: int) -> list[Hit]:
-    """Logic THUẦN (không cần model/Qdrant, test được): threshold + source bonus + sort.
+    """Logic THUẦN (không cần model/Qdrant, test được): threshold + bonus + dedup + sort.
 
     - threshold trên điểm rerank THUẦN (rs < min_score -> loại).
     - source bonus NHỎ (chia 100) chỉ tie-break, không lấn át relevance.
+    - khử near-duplicate: cùng url HOẶC ~80 ký tự đầu trùng -> giữ chunk điểm cao hơn.
     """
     hits = []
     for c, rs in zip(cands, rerank_scores):
@@ -120,7 +135,19 @@ def rank_candidates(cands, rerank_scores, source_priority: dict,
             collection=getattr(c, "collection", ""),
         ))
     hits.sort(key=lambda h: h.score, reverse=True)
-    return hits[:top_n]
+
+    # khử near-duplicate SAU sort (giữ cái điểm cao nhất của mỗi nhóm trùng)
+    seen_url, seen_text, deduped = set(), set(), []
+    for h in hits:
+        tkey = _near_dup_key(h.text)
+        # url rỗng (vd PDF phác đồ) -> không dedup theo url, chỉ theo text
+        if (h.url and h.url in seen_url) or tkey in seen_text:
+            continue
+        if h.url:
+            seen_url.add(h.url)
+        seen_text.add(tkey)
+        deduped.append(h)
+    return deduped[:top_n]
 
 
 class Retriever:

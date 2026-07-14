@@ -31,7 +31,13 @@ from urllib.parse import urlparse
 import requests
 
 
-ALLOWED_HOST = "kcb.vn"                 # CHỈ nguồn này (hợp pháp)
+# Chỉ tải VĂN BẢN NHÀ NƯỚC công khai (Điều 15 Luật SHTT: không bảo hộ bản quyền):
+#   - mọi domain đuôi .gov.vn (Bộ Y tế, Sở Y tế tỉnh, bệnh viện/cục công lập)
+#   - viendinhduong.vn (Viện Dinh dưỡng QG, trực thuộc BYT — không đuôi .gov.vn)
+# KHÔNG tải nguồn có bản quyền (sách BV, giáo trình, MSD, Dược thư) —
+# xem governance/knowledge_sources_license.md.
+ALLOWED_SUFFIXES = (".gov.vn", ".kcb.vn")   # .kcb.vn -> daithaoduong.kcb.vn...
+ALLOWED_HOSTS = ("kcb.vn", "viendinhduong.vn")
 # HTTP header PHẢI là ASCII (mã hoá latin-1) -> không bỏ dấu tiếng Việt vào đây.
 USER_AGENT = "medical-ai-assistant/0.1 (research/educational; contact via repo)"
 OUT_DIR = "data/raw/kb/pdf"
@@ -39,12 +45,19 @@ DEFAULT_DELAY = 3.0                     # giây giữa các request (lịch sự
 TIMEOUT = 60
 
 
+def _host_allowed(host: str) -> bool:
+    host = host.lower()
+    return host in ALLOWED_HOSTS or any(
+        host == s.lstrip(".") or host.endswith(s) for s in ALLOWED_SUFFIXES)
+
+
 def _check_host(url: str) -> None:
     host = urlparse(url).netloc.lower()
-    if not (host == ALLOWED_HOST or host.endswith("." + ALLOWED_HOST)):
+    if not _host_allowed(host):
         raise SystemExit(
-            f"Từ chối tải {host}: kb_fetch CHỈ cho phép {ALLOWED_HOST} (nguồn hợp pháp). "
-            "Nguồn khác có bản quyền — xem governance/knowledge_sources_license.md."
+            f"Từ chối tải {host}: kb_fetch CHỈ cho phép văn bản nhà nước "
+            f"(*.gov.vn + {ALLOWED_HOSTS}). Nguồn khác có thể có bản quyền — "
+            "xem governance/knowledge_sources_license.md."
         )
 
 
@@ -71,28 +84,40 @@ def load_robots(host: str) -> tuple[urllib.robotparser.RobotFileParser, float]:
 
 
 def _filename_from_url(url: str) -> str:
-    name = Path(urlparse(url).path).name or "download.pdf"
+    """Tên file = <host>__<tên gốc>.pdf (prefix host tránh trùng giữa nhiều nguồn)."""
+    from urllib.parse import unquote
+    p = urlparse(url)
+    name = Path(unquote(p.path)).name or "download.pdf"
     if not name.lower().endswith(".pdf"):
         name += ".pdf"
-    return name
+    host = p.netloc.lower().replace(":", "_")
+    # bỏ ký tự lạ khỏi tên (giữ chữ/số/.-_)
+    import re
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:120]
+    return f"{host}__{safe}"
 
 
 def fetch_urls(urls: list[str], out_dir: str = OUT_DIR, delay: float | None = None) -> int:
     if not urls:
         raise SystemExit("Không có URL nào.")
     for u in urls:
-        _check_host(u)                  # chặn nguồn ngoài kcb.vn NGAY
-
-    rp, robots_delay = load_robots(ALLOWED_HOST)
-    delay = delay if delay is not None else robots_delay
+        _check_host(u)                  # chặn nguồn ngoài whitelist NGAY (trước khi tải)
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     sess = requests.Session()
     sess.headers.update({"User-Agent": USER_AGENT})
 
+    robots_cache: dict = {}             # host -> (parser, delay); đọc robots 1 lần/host
+
     ok = skip = fail = 0
     for i, url in enumerate(urls):
+        host = urlparse(url).netloc.lower()
+        if host not in robots_cache:
+            robots_cache[host] = load_robots(host)
+        rp, host_delay = robots_cache[host]
+        cur_delay = delay if delay is not None else host_delay
+
         if rp is not None and not rp.can_fetch(USER_AGENT, url):
             print(f"[robots-block] bỏ qua (Disallow): {url}")
             skip += 1
@@ -104,8 +129,16 @@ def fetch_urls(urls: list[str], out_dir: str = OUT_DIR, delay: float | None = No
             continue
         try:
             if i > 0:
-                time.sleep(delay)       # rate-limit giữa các request
-            r = sess.get(url, timeout=TIMEOUT)
+                time.sleep(cur_delay)   # rate-limit giữa các request (theo robots per-host)
+            try:
+                r = sess.get(url, timeout=TIMEOUT)
+            except requests.exceptions.SSLError:
+                # Site chính phủ VN hay có cert hết hạn/thiếu chain. Host đã trong whitelist
+                # nhà nước -> chấp nhận tải verify=False, CẢNH BÁO rõ.
+                print(f"[warn-ssl] cert lỗi ở {host} -> tải verify=False (chỉ vì .gov.vn tin cậy).")
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                r = sess.get(url, timeout=TIMEOUT, verify=False)
             r.raise_for_status()
             ctype = r.headers.get("Content-Type", "")
             if "pdf" not in ctype.lower() and not r.content[:4] == b"%PDF":
@@ -132,7 +165,14 @@ def main() -> None:
     urls = list(args.urls)
     if args.url_file:
         with open(args.url_file, encoding="utf-8") as f:
-            urls += [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+            for ln in f:
+                ln = ln.strip()
+                if not ln or ln.startswith("#"):
+                    continue
+                # mỗi dòng: "<url><TAB hoặc khoảng trắng># chú thích" -> chỉ lấy phần URL.
+                url = ln.split()[0].split("\t")[0].strip()
+                if url:
+                    urls.append(url)
     fetch_urls(urls, args.out, args.delay)
 
 

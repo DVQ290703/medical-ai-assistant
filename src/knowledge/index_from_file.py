@@ -51,8 +51,25 @@ def ensure_collection(client: QdrantClient, name: str, dense_dim: int):
     print(f"[qdrant] Tạo collection '{name}' (hybrid dense+sparse)")
 
 
+def delete_by_source(client: QdrantClient, collection: str, source: str) -> None:
+    """Xóa mọi point có payload.source == source (vd 'byt-kcb') khỏi collection.
+
+    KHÔNG đụng file chunk trên đĩa — chỉ xóa vector trong Qdrant. Dựng lại được bằng
+    embed + index từ file chunk.
+    """
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    existing = {c.name for c in client.get_collections().collections}
+    if collection not in existing:
+        print(f"[del] collection '{collection}' chưa có -> bỏ qua.")
+        return
+    flt = Filter(must=[FieldCondition(key="source", match=MatchValue(value=source))])
+    client.delete(collection_name=collection, points_selector=flt)
+    info = client.get_collection(collection)
+    print(f"[del] đã xóa point source='{source}' khỏi '{collection}'. Còn: {info.points_count:,}")
+
+
 def index_file(in_path: str, collection: str, config_path: str = CONFIG_PATH,
-               batch_size: int = 256) -> int:
+               batch_size: int = 256, delete_source: str | None = None) -> int:
     host, port, dim = load_qdrant_cfg(config_path)
     client = QdrantClient(host=host, port=port)
     try:
@@ -60,6 +77,8 @@ def index_file(in_path: str, collection: str, config_path: str = CONFIG_PATH,
     except Exception as e:
         raise SystemExit(f"Không kết nối Qdrant {host}:{port} ({e}). Bật docker qdrant trước.")
     ensure_collection(client, collection, dim)
+    if delete_source:
+        delete_by_source(client, collection, delete_source)
 
     n = 0
     batch = []
@@ -101,8 +120,11 @@ def main() -> None:
     ap.add_argument("--collection", required=True)
     ap.add_argument("--config", default=CONFIG_PATH)
     ap.add_argument("--batch-size", type=int, default=256)
+    ap.add_argument("--delete-source", default=None,
+                    help="xóa point source=X trong collection TRƯỚC khi index (vd byt-kcb)")
     args = ap.parse_args()
-    index_file(args.in_path, args.collection, args.config, args.batch_size)
+    index_file(args.in_path, args.collection, args.config, args.batch_size,
+               args.delete_source)
 
 
 if __name__ == "__main__":

@@ -58,9 +58,12 @@ def load_chunk_cfg(path: str = CONFIG_PATH) -> dict:
     with open(path, encoding="utf-8") as f:
         y = yaml.safe_load(f) or {}
     c = y.get("chunk", {}) or {}
-    # min_size: ngưỡng gom chunk nhỏ liền kề (mặc định ~size/3). 0 = tắt gom.
+    # max_size: hard cap 1 chunk (kể cả bảng liều). Mặc định = embedding.max_length để chunk
+    # không bao giờ vượt giới hạn embed (tránh bị cắt cụt). min_size: gom chunk vụn (~size/3).
+    emb_max = (y.get("embedding", {}) or {}).get("max_length", 2048)
     return {"size": c.get("size", 768), "overlap": c.get("overlap", 96),
             "min_size": c.get("min_size", c.get("size", 768) // 3),
+            "max_size": c.get("max_size", emb_max),
             "strategy": c.get("strategy", "structure-aware")}
 
 
@@ -141,15 +144,21 @@ def _pack(pieces: list[str], size: int, overlap: int, prefix: str = "") -> list[
     return chunks
 
 
-def chunk_section(sec: dict, size: int, overlap: int) -> list[str]:
-    """1 section -> list chunk. dosage-guard + recursive fallback + prepend heading."""
+def chunk_section(sec: dict, size: int, overlap: int, max_size: int = 2048) -> list[str]:
+    """1 section -> list chunk. dosage-guard + recursive fallback + prepend heading.
+
+    max_size: HARD CAP. Dosage-guard giữ nguyên khối CHỈ khi <= max_size. Vượt cap ->
+    buộc tách (chunk bị embed cắt cụt còn tệ hơn tách khối liều). Đặt = max_length embed.
+    """
     heading, body = sec["heading"], sec["body"]
     full = (f"{heading}\n{body}" if heading and body else heading or body).strip()
     if not full:
         return []
     if _n_tokens(full) <= size:                # đã ngắn -> giữ nguyên
         return [full]
-    if _looks_like_dosage_block(body):         # bảng liều -> KHÔNG tách (an toàn y khoa)
+    # bảng liều -> giữ nguyên, NHƯNG chỉ khi không vượt hard cap (tránh chunk khổng lồ bị
+    # cắt cụt lúc embed). Vượt cap thì tách như section thường.
+    if _looks_like_dosage_block(body) and _n_tokens(full) <= max_size:
         return [full]
     return _pack(_split_recursive(body), size, overlap, prefix=heading)
 
@@ -178,23 +187,25 @@ def _merge_small(chunks: list[str], size: int, min_size: int) -> list[str]:
     return merged
 
 
-def chunk_text(text: str, size: int, overlap: int, min_size: int = 0) -> list[str]:
+def chunk_text(text: str, size: int, overlap: int, min_size: int = 0,
+               max_size: int = 2048) -> list[str]:
     """Structure-aware: heading-split -> chunk từng section -> gộp chunk nhỏ liền kề."""
     text = (text or "").strip()
     if not text:
         return []
     out = []
     for sec in split_by_heading(text):
-        out.extend(chunk_section(sec, size, overlap))
+        out.extend(chunk_section(sec, size, overlap, max_size))
     out = [c for c in out if c.strip()]
     if min_size > 0:
         out = _merge_small(out, size, min_size)
     return out
 
 
-def chunk_record(rec: dict, size: int, overlap: int, min_size: int = 0) -> list[dict]:
+def chunk_record(rec: dict, size: int, overlap: int, min_size: int = 0,
+                 max_size: int = 2048) -> list[dict]:
     """1 document -> nhiều chunk record. Giữ title/url; section = heading của chunk (nếu có)."""
-    pieces = chunk_text(rec.get("text", ""), size, overlap, min_size)
+    pieces = chunk_text(rec.get("text", ""), size, overlap, min_size, max_size)
     out = []
     for i, piece in enumerate(pieces):
         first_line = piece.splitlines()[0] if piece else ""
@@ -214,9 +225,9 @@ def chunk_record(rec: dict, size: int, overlap: int, min_size: int = 0) -> list[
 def run(in_path: str, out_path: str, config_path: str = CONFIG_PATH,
         show_stats: bool = False, limit: int | None = None) -> int:
     cfg = load_chunk_cfg(config_path)
-    size, overlap, min_size = cfg["size"], cfg["overlap"], cfg["min_size"]
-    print(f"[chunk] structure-aware | size={size} overlap={overlap} min={min_size} tok "
-          f"(~{TOKENS_PER_WORD} tok/từ)")
+    size, overlap, min_size, max_size = cfg["size"], cfg["overlap"], cfg["min_size"], cfg["max_size"]
+    print(f"[chunk] structure-aware | size={size} overlap={overlap} min={min_size} "
+          f"max={max_size} tok (~{TOKENS_PER_WORD} tok/từ)")
 
     inp, out = Path(in_path), Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +243,7 @@ def run(in_path: str, out_path: str, config_path: str = CONFIG_PATH,
                 break
             rec = json.loads(line)
             n_doc += 1
-            for ch in chunk_record(rec, size, overlap, min_size):
+            for ch in chunk_record(rec, size, overlap, min_size, max_size):
                 fout.write(json.dumps(ch, ensure_ascii=False) + "\n")
                 n_chunk += 1
                 tk = _n_tokens(ch["text"])
