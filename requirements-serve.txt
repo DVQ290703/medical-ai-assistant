@@ -1,0 +1,8 @@
+# Serving app (FastAPI /chat) — NHẸ: encode/rerank chạy REMOTE (Colab), không load model.
+# Không cần torch/FlagEmbedding/sentence-transformers ở container này.
+fastapi>=0.110
+uvicorn>=0.29
+qdrant-client>=1.10
+requests>=2.31
+pyyaml>=6.0
+python-dotenv>=1.0

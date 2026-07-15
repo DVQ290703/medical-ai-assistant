@@ -67,8 +67,11 @@ def test_dedup_cung_url_giu_diem_cao():
 
 
 def test_dedup_text_gan_trung():
-    # cùng ~80 ký tự đầu (url rỗng, vd PDF) -> coi là trùng
-    same = "Cùng một đoạn mở đầu giống hệt nhau để test near duplicate theo text đầu"
+    # cùng >80 ký tự đầu (url rỗng, vd PDF) -> _near_dup_key trùng -> coi là trùng.
+    # 'same' phải DÀI HƠN 80 ký tự để phần "1"/"2" nằm NGOÀI cửa sổ fingerprint.
+    same = ("Cùng một đoạn mở đầu giống hệt nhau được lặp lại để đảm bảo vượt quá "
+            "tám mươi ký tự đầu tiên dùng cho near duplicate")
+    assert len(same) > 80
     cands = [_c("byt-kcb", same + " phần 1", url=""),
              _c("byt-kcb", same + " phần 2", url="")]
     hits = rank_candidates(cands, [0.9, 0.85], {}, min_score=0.0, top_n=10)

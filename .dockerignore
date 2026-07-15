@@ -1,0 +1,16 @@
+# Không đưa vào image: nặng / không cần cho serving app (encode/rerank chạy remote).
+venv/
+data/                    # corpus/vector nặng — Qdrant giữ data qua volume riêng
+artifacts/
+notebooks/
+scripts/dev/
+tests/
+.git/
+__pycache__/
+*.pyc
+.env                     # secret -> truyền qua compose environment, KHÔNG bake vào image
+*.pdf
+*.jsonl
+.ipynb_checkpoints/
+wandb/
+mlruns/

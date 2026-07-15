@@ -1,0 +1,18 @@
+# CHỈ Docker hoá app FastAPI. Qdrant DÙNG LẠI cái đang chạy sẵn trên máy host
+# (đã có 158k điểm) — app trỏ tới host qua host.docker.internal.
+# encode/rerank vẫn REMOTE trên Colab (ngrok) — set RAG_REMOTE_* trong .env.
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Qdrant chạy trên máy HOST (ngoài container) -> host.docker.internal
+      - QDRANT_HOST=host.docker.internal
+      - QDRANT_PORT=6333
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - RAG_REMOTE_URL=${RAG_REMOTE_URL}
+      - RAG_REMOTE_TOKEN=${RAG_REMOTE_TOKEN}
+    extra_hosts:
+      # cần trên Linux; Docker Desktop (Windows/Mac) đã có sẵn nhưng khai báo cho chắc
+      - "host.docker.internal:host-gateway"

@@ -19,12 +19,18 @@ retriever:
   min_score: 0.3                    # ngưỡng rerank; <ngưỡng -> loại (trả rỗng, không bịa).
                                     # Calibrate thực tế: query thật ~0.97, query vô nghĩa ~0.00.
   collections: [vinmec_kb, vinmec_qa]
-  query_device: cpu                 # "cpu" | "cuda"
+  query_device: cpu                 # "cpu" | "cuda" (chỉ dùng khi encoder_backend=local)
+  # encoder_backend: local (BGE-M3 tại máy) | remote (gọi model server Colab qua ngrok).
+  # Máy yếu -> remote. remote_url/token nên set qua .env (RAG_REMOTE_URL/RAG_REMOTE_TOKEN).
+  encoder_backend: remote           # remote: gọi model server Colab (máy yếu không load local)
+  remote_url: ""                    # vd https://xxx.ngrok-free.app (ưu tiên env RAG_REMOTE_URL)
+  remote_token: ""                  # khớp SECRET trong notebook (ưu tiên env RAG_REMOTE_TOKEN)
 reranker:
   model: BAAI/bge-reranker-v2-m3    # reranker đa ngữ (không dùng bản -en)
   top_n: 4
-  device: cpu                       # rerank ~16 candidate -> CPU đủ
+  device: cpu                       # rerank ~16 candidate -> CPU đủ (khi backend=local)
   use_fp16: false                   # fp16 chỉ lợi trên GPU
+  backend: remote                   # local | remote (dùng chung remote_url/token của retriever)
 # Ưu tiên nguồn uy tín khi điểm rerank SÁT nhau (bonus nhỏ tie-break, không lấn át relevance).
 source_priority: { byt-kcb: 2, vinmec-article: 1 }
 # Qdrant thay FAISS: BGE-M3 sinh hybrid dense+sparse; Qdrant index cả hai +

@@ -26,6 +26,14 @@ from dataclasses import dataclass
 
 import yaml
 
+# Nạp .env (RAG_REMOTE_URL, RAG_REMOTE_TOKEN...) khi chạy local.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 # THỨ TỰ IMPORT (Windows): nạp torch + FlagEmbedding TRƯỚC qdrant_client (qua vectorstore).
 # Nếu qdrant nạp native lib trước, tiến trình crash cứng không traceback khi sau đó import
 # FlagEmbedding. Đã gặp bug này ở embedding.py -> giữ đúng thứ tự.
@@ -69,6 +77,11 @@ class RetrieverConfig:
     reranker_device: str = "cpu"
     reranker_fp16: bool = False
     source_priority: dict = None    # {source: bonus}
+    # remote model server (Colab qua ngrok) — máy yếu không load nổi model
+    encoder_backend: str = "local"  # local | remote
+    reranker_backend: str = "local"
+    remote_url: str = ""
+    remote_token: str = ""
 
     def __post_init__(self):
         if self.source_priority is None:
@@ -92,15 +105,26 @@ def config_from_yaml(path: str = CONFIG_PATH) -> RetrieverConfig:
     c.top_n = r.get("top_n", c.top_n)
     c.min_score = r.get("min_score", c.min_score)
     c.collections = tuple(r.get("collections", list(c.collections)))
+    c.encoder_backend = r.get("encoder_backend", c.encoder_backend)
+    c.remote_url = r.get("remote_url", c.remote_url)
+    c.remote_token = r.get("remote_token", c.remote_token)
 
     rr = y.get("reranker", {}) or {}
     c.reranker_model = rr.get("model", c.reranker_model)
     c.reranker_device = rr.get("device", c.reranker_device)
     c.reranker_fp16 = rr.get("use_fp16", c.reranker_fp16)
+    c.reranker_backend = rr.get("backend", c.reranker_backend)
+
+    # env override (đổi ngrok URL mỗi session Colab dễ, không sửa yaml)
+    c.remote_url = os.environ.get("RAG_REMOTE_URL", c.remote_url)
+    c.remote_token = os.environ.get("RAG_REMOTE_TOKEN", c.remote_token)
 
     vs = y.get("vectorstore", {}) or {}
     c.qdrant_host = vs.get("host", c.qdrant_host)
     c.qdrant_port = vs.get("port", c.qdrant_port)
+    # env override: trong container docker-compose, Qdrant là service 'qdrant' (không localhost)
+    c.qdrant_host = os.environ.get("QDRANT_HOST", c.qdrant_host)
+    c.qdrant_port = int(os.environ.get("QDRANT_PORT", c.qdrant_port))
 
     c.source_priority = y.get("source_priority", {}) or {}
     return c
@@ -155,11 +179,34 @@ class Retriever:
         self.cfg = cfg or config_from_yaml()
         self.client = connect(self.cfg.qdrant_host, self.cfg.qdrant_port)
         self.reranker = Reranker(self.cfg.reranker_model, self.cfg.reranker_device,
-                                 self.cfg.reranker_fp16)
+                                 self.cfg.reranker_fp16,
+                                 backend=self.cfg.reranker_backend,
+                                 remote_url=self.cfg.remote_url,
+                                 remote_token=self.cfg.remote_token)
         self._encoder = None
 
+    def _encode_remote(self, query: str):
+        """Gọi model server (Colab) /encode -> (dense, sparse_idx, sparse_val)."""
+        import requests
+        if not self.cfg.remote_url:
+            raise SystemExit("encoder_backend=remote nhưng thiếu remote_url "
+                             "(set RAG_REMOTE_URL trong .env hoặc rag.yaml).")
+        try:
+            r = requests.post(
+                self.cfg.remote_url.rstrip("/") + "/encode",
+                json={"query": query, "max_length": self.cfg.max_length},
+                headers={"X-Token": self.cfg.remote_token}, timeout=60)
+            r.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise SystemExit(f"[remote] model server không phản hồi ({e}). "
+                             "Kiểm tra notebook Colab còn chạy + RAG_REMOTE_URL đúng?")
+        d = r.json()
+        return d["dense"], d["sparse"]["indices"], d["sparse"]["values"]
+
     def _encode_query(self, query: str):
-        """BGE-M3 encode query -> (dense list, sparse indices, sparse values)."""
+        """Encode query -> (dense, sparse_idx, sparse_val). local BGE-M3 | remote Colab."""
+        if self.cfg.encoder_backend == "remote":
+            return self._encode_remote(query)
         if self._encoder is None:
             import torch  # noqa: F401  (thứ tự import an toàn)
             from FlagEmbedding import BGEM3FlagModel

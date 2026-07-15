@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
-# Phase 4: FastAPI + RAG (demo offline)
+# Phase 4: FastAPI + RAG chat UI. Cần: Qdrant chạy + .env (GROQ_API_KEY, RAG_REMOTE_*).
+# Mở http://localhost:8000 sau khi chạy.
 set -euo pipefail
-uvicorn src.serving.app:app --host 0.0.0.0 --port 8000
+python -m src.serving.app
