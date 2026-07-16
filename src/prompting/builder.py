@@ -51,16 +51,37 @@ def build_user_prompt(query: str, hits: list, force_answer: bool = False) -> str
 MAX_HISTORY_TURNS = 6
 
 
+def _fewshot_turns(examples) -> list[dict]:
+    """Biến ví dụ few-shot (dict {user, [context], assistant}) thành cặp message user/assistant.
+
+    Ví dụ có context -> ghép giống lượt thật (context đánh số + câu hỏi) để model học đúng
+    KHUÔN cả khi có tài liệu. Đặt TRƯỚC hội thoại thật (dạy hành vi, không phải nội dung).
+    """
+    out: list[dict] = []
+    for ex in examples or ():
+        u = ex.get("user", "")
+        ctx = ex.get("context", "")
+        user_msg = (
+            f"THÔNG TIN THAM KHẢO:\n{ctx}\n\nCÂU HỎI: {u}" if ctx else u
+        )
+        out.append({"role": "user", "content": user_msg})
+        out.append({"role": "assistant", "content": ex.get("assistant", "")})
+    return out
+
+
 def build_turns(query: str, hits: list, history: list | None = None,
-                force_answer: bool = False) -> list[dict]:
+                force_answer: bool = False, fewshot=None) -> list[dict]:
     """Ghép lịch sử hội thoại thành list messages cho engine.generate_messages.
 
+    fewshot: ví dụ mẫu (asset từ prompts/fewshot_*.jsonl) -> chèn ĐẦU danh sách, trước
+    history thật. Dạy model KHUÔN trả lời (hỏi lại đúng cách, không né điều trị, giữ
+    ranh giới) — hiệu quả hơn liệt kê quy tắc.
     history: list {role: 'user'|'assistant', content: str} các lượt TRƯỚC (không gồm
     query hiện tại). Lượt cuối (query hiện tại) mới được đính context RAG — các lượt cũ
     giữ nguyên text để model hiểu mạch, nhưng KHÔNG kèm lại context (tránh phình prompt).
     force_answer: đã hỏi lại quá nhiều -> buộc trả lời (không hỏi tiếp).
     """
-    turns: list[dict] = []
+    turns: list[dict] = _fewshot_turns(fewshot)
     for h in (history or [])[-MAX_HISTORY_TURNS:]:
         role = h.get("role")
         content = (h.get("content") or "").strip()

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from src.serving.guards.output_guard import check_output
 from src.serving.policy.engine import decide as policy_decide
 from src.serving.policy.disclaimer import disclaimer, has_disclaimer
-from src.prompting.template import load_system_prompt
+from src.prompting.template import load_system_prompt, load_fewshot
 from src.prompting.builder import build_turns
 from src.serving.citation import build_sources, strip_llm_sources
 from src.generation.engine import engine_from_config, gen_config_from_yaml
@@ -113,12 +113,23 @@ def _answer(query: str, history: list, citation_required: bool) -> Answer:
     if not hits:
         return Answer(text=NO_INFO_MSG, kind="no_info")
 
+    # 2b. INTENT GATE (ràng buộc CỨNG): nếu người dùng mô tả triệu chứng để tìm bệnh mà
+    #     chưa đủ chi tiết -> buộc HỎI LẠI do CODE kiểm soát (model không có cơ hội phỏng
+    #     đoán bệnh). Chỉ gác khi CHƯA hỏi lại lần nào (gate tự kiểm tra history).
+    from src.prompting.intent_gate import clarification_question
+    with obs.span("intent-gate") as sp:
+        gate_q = clarification_question(query, history, _engine)
+        sp.update(output=gate_q or "(cho qua)")
+    if gate_q:
+        return Answer(text=gate_q, kind="clarify")
+
     # 3. Build prompt (gồm lịch sử hội thoại) + generate
     #    Lưới an toàn: nếu bot đã HỎI LẠI >= MAX_CLARIFY lần -> buộc trả lời (không hỏi vô tận).
     system = load_system_prompt(_gen_cfg.system_prompt_path)
     n_clarify = sum(1 for h in history
                     if h.get("role") == "assistant" and "[HỎI LẠI]" in (h.get("content") or ""))
-    turns = build_turns(query, hits, history, force_answer=n_clarify >= MAX_CLARIFY)
+    turns = build_turns(query, hits, history, force_answer=n_clarify >= MAX_CLARIFY,
+                        fewshot=load_fewshot())
     with obs.span("generate", as_type="generation", model=_gen_cfg.model) as sp:
         text = _engine.generate_messages(system, turns)
         sp.update(output=text)
