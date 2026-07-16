@@ -1,6 +1,11 @@
-"""Verify kb_fetch + pdf loader end-to-end với 1 PDF thật từ kcb.vn."""
+"""Dev script (KHÔNG phải unit test): verify kb_fetch + pdf loader end-to-end
+với 1 PDF thật từ kcb.vn. Gọi mạng thật -> chạy tay:  python scripts/dev/check_kbfetch.py
+"""
 import sys, io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+# UTF-8 cho console Windows khi chạy trực tiếp (tránh lỗi encoding tiếng Việt)
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 from src.knowledge.kb_fetch import fetch_urls, _check_host
 

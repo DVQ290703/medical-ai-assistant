@@ -1,42 +1,67 @@
-# Medical AI Assistant (Unsloth + QLoRA + RAG)
+# Medical AI Assistant — Vietnamese Medical Q&A (QLoRA + RAG)
 
-Trợ lý Q&A **y học hiện đại tiếng Việt**. Fine-tune (Llama 3.1 8B / QLoRA-Unsloth) để dạy
-*reasoning + phong cách + citation*; facts đến từ **RAG nguồn y khoa VN** (không nhớ trong model).
+Trợ lý hỏi–đáp y học tiếng Việt, thiết kế theo nguyên tắc **an toàn trước, dẫn nguồn bắt buộc**.
+Kiến trúc tách bạch: model được fine-tune (Llama 3.1 8B, QLoRA/Unsloth) để học *cách lập luận,
+văn phong và trích dẫn* — còn **kiến thức thực tế đến từ RAG trên nguồn y khoa Việt Nam**, không
+ghi nhớ trong trọng số model. Nhờ vậy câu trả lời luôn truy vết được về tài liệu gốc và cập nhật
+được mà không phải train lại.
 
-**Tiếng Việt = low-resource:** không có sẵn dataset reasoning y khoa VN -> data theo hướng
-hybrid (dịch medical-o1 làm seed + augment Vietnamese-native). Base model & embedding phải
-benchmark cho tiếng Việt (xem ADR-0003, ADR-0005).
+> ⚠️ **Chỉ phục vụ nghiên cứu / học tập.** Không dùng để chẩn đoán, kê đơn hay ra quyết định y tế
+> thật. Chi tiết giới hạn và rủi ro: [`governance/model_card.md`](governance/model_card.md).
 
-> ⚠️ Research/education only. KHÔNG chẩn đoán, kê đơn, hay quyết định y tế thật.
-> Xem `governance/model_card.md` và `docs/medical-ai-assistant-plan.md`.
+## Điểm nổi bật
 
-## Designed vs Built
-- **Built (chạy thật, kể cả trên Kaggle)**: `src/data`, `src/knowledge`, `src/prompting`,
-  `src/training`, `src/evaluation`, RAG demo offline.
-- **Designed + stub (interface + mock, deploy thật cần cloud)**: phần cloud của `src/serving`
-  (Redis, autoscale) và `src/monitoring` (live dashboard, alerting).
+- **RAG hybrid, ưu tiên độ tin cậy nguồn** — BGE-M3 sinh vector dense + sparse, Qdrant fuse bằng
+  RRF, cross-encoder rerank, rồi cộng điểm ưu tiên cho nguồn Bộ Y tế khi điểm sát nhau. Nếu không
+  tài liệu nào đủ liên quan (dưới ngưỡng) thì trả về rỗng — thà nói "không tìm thấy" còn hơn bịa.
+- **Safety plane nhiều lớp** — phát hiện cấp cứu và định tuyến, che PII, từ chối câu ngoài phạm vi,
+  guard đầu vào/đầu ra, chèn disclaimer theo chính sách. Kết quả đo (MVP): định tuyến cấp cứu
+  **recall 100% / false-positive 0%**, che PII **100%** không che nhầm nội dung y khoa.
+- **Xử lý tiếng Việt low-resource** — không có sẵn dataset reasoning y khoa tiếng Việt, nên dữ liệu
+  đi theo hướng lai: dịch medical-o1 làm seed + tăng cường dữ liệu bản địa. Base model và embedding
+  đều phải benchmark riêng cho tiếng Việt trước khi chốt.
+- **Quyết định kỹ thuật được ghi lại** — mỗi lựa chọn lớn (RAG vs fine-tune, chunking, embedding,
+  serving, base model) có một ADR kèm lý do và đánh đổi trong [`governance/adr/`](governance/adr/).
 
-## Architecture (3 planes)
-- **Knowledge plane** (offline): sources → chunk/embed → vector DB. → `src/knowledge/`
-- **Serving plane** (online): input guard → retrieval → prompt → generation → output guard →
-  policy → citation. → `src/serving/`, `src/prompting/`, `src/generation/`
-- **Observability plane**: monitoring → human review queue → feedback. → `src/monitoring/`
+## Kiến trúc — 3 tầng
 
-Chi tiết: `docs/architecture.md`.
+| Tầng | Vai trò | Code |
+|------|---------|------|
+| **Knowledge** (offline) | Nạp nguồn → chunk → embed → vector DB (Qdrant, hybrid + RRF). Encode/rerank query có thể offload sang model server remote (Colab GPU) qua client có fallback + retry. | [`src/knowledge/`](src/knowledge/) |
+| **Serving** (online) | input guard → retrieval → build prompt → generation → output guard → policy → citation | [`src/serving/`](src/serving/), [`src/prompting/`](src/prompting/), [`src/generation/`](src/generation/) |
+| **Observability** | tracing (Langfuse) → hàng đợi human review → feedback | [`src/monitoring/`](src/monitoring/) |
 
-## Ba loại "prompt" (đừng nhầm)
-- `prompts/`        → TEXT template thật (versioned, là asset)
-- `configs/prompt.yaml` → tham số (temperature, max_tokens, citation_required)
-- `src/prompting/`  → CODE build prompt
+Chi tiết đầy đủ: [`docs/architecture.md`](docs/architecture.md).
 
-## Quickstart
+## Trạng thái triển khai
+
+Dự án phân biệt rõ phần đã chạy thật và phần mới ở mức thiết kế — để người đọc biết đâu là code
+kiểm chứng được, đâu là interface chờ hạ tầng cloud:
+
+- **Đã chạy thật** (kể cả trên Kaggle/Colab): data pipeline, knowledge/RAG, prompting, training,
+  evaluation, RAG demo offline. Observability đã hoạt động: trace Langfuse (tự tắt thành no-op nếu
+  thiếu key) và hàng đợi feedback 👍/👎 chờ người duyệt trước khi vào train.
+- **Thiết kế + stub** (cần cloud mới deploy thật): phần cloud của serving (Redis, autoscale) và
+  phần live của monitoring — `alerts.py`, `retrieval_drift.py` hiện là placeholder.
+
+## Chạy thử
+
 ```bash
 pip install -e .
-make data       # Phase 1: ingest -> validate -> clean -> pii -> split
-make train      # Phase 2: QLoRA fine-tune (Unsloth)
-make eval       # Phase 3: benchmark + quality + retrieval + safety (đọc evaluation_manifest)
-make serve      # Phase 4: FastAPI + RAG (demo offline)
+pip install -r requirements.txt        # runtime deps (qdrant-client, BGE-M3, ...)
+# chỉ cần chạy phần serving: pip install -r requirements-serve.txt
+
+make data     # Phase 1 — ingest → validate → clean → PII scrub → split
+make train    # Phase 2 — QLoRA fine-tune (Unsloth)
+make eval     # Phase 3 — benchmark + quality + retrieval + safety
+make serve    # Phase 4 — FastAPI + RAG (demo offline)
 ```
 
-## Layout
-Xem `docs/architecture.md`. `data/` và `artifacts/` KHÔNG commit (DVC-tracked).
+Kết quả evaluation mới nhất: [`reports/eval_report.md`](reports/eval_report.md).
+
+## Ghi chú kỹ thuật
+
+- **Ba khái niệm "prompt" tách biệt:** [`prompts/`](prompts/) là template text có version (asset),
+  [`configs/prompt.yaml`](configs/prompt.yaml) là tham số (temperature, max_tokens, citation), còn
+  [`src/prompting/`](src/prompting/) là code dựng prompt.
+- **Dữ liệu nặng không nằm trong git:** `data/` và `artifacts/` được quản lý bằng DVC.

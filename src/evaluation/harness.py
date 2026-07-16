@@ -21,6 +21,7 @@ def run(safety_only: bool = False, timestamp: str = "") -> str:
     lines = ["# Báo cáo Evaluation — Medical RAG (VN)", ""]
     if timestamp:
         lines.append(f"_Sinh lúc: {timestamp}_\n")
+    lines.append("> ⚠️ File này TỰ SINH bởi `src/evaluation/harness.py` — đừng sửa tay (chạy lại sẽ ghi đè).\n")
     lines.append("> Số liệu MVP. Set nhỏ, tự sinh -> ĐỊNH HƯỚNG, không phải benchmark chuẩn.\n")
 
     # --- Safety (luôn chạy được) ---
