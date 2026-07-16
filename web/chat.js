@@ -2,11 +2,79 @@ const chat = document.getElementById("chat");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
+const convoList = document.getElementById("convo-list");
+const sidebar = document.getElementById("sidebar");
+const menuToggle = document.getElementById("menu-toggle");
 
-// Lịch sử hội thoại (client giữ — server stateless). Gửi kèm mỗi /chat.
-// Chỉ giữ vài lượt gần nhất để prompt không phình (khớp MAX_HISTORY_TURNS ở backend).
-let history = [];
 const MAX_HISTORY = 6;
+
+// --- Nhiều hội thoại (trong bộ nhớ phiên — tắt trang là mất) ---
+// Mỗi cuộc: { id, title, msgs[], history[] }
+//   msgs: các tin để render lại khi chuyển cuộc {role:'user'|'bot', text, cls, sources, fb}
+//   history: gửi kèm /chat (server stateless) — lượt user/assistant đã cắt gọn
+let convos = [];
+let activeId = null;
+let seq = 0;
+
+function activeConvo() {
+  return convos.find((c) => c.id === activeId);
+}
+
+function newConvo() {
+  // Nếu đang ở một cuộc TRỐNG (chưa nhắn gì) -> không tạo thêm cuộc trống trùng lặp,
+  // chỉ dùng lại cuộc trống hiện tại (giống ChatGPT).
+  const cur = activeConvo();
+  if (cur && cur.msgs.length === 0) {
+    input.focus();
+    sidebar.classList.remove("open");
+    return cur;
+  }
+  const c = { id: ++seq, title: "Hội thoại mới", msgs: [], history: [] };
+  convos.unshift(c);
+  activeId = c.id;
+  renderConvoList();
+  renderChat();
+  input.focus();
+  sidebar.classList.remove("open");
+  return c;
+}
+
+function switchConvo(id) {
+  if (id === activeId) { sidebar.classList.remove("open"); return; }
+  // Dọn cuộc TRỐNG đang mở khi rời sang cuộc khác (không để cuộc trống đọng lại).
+  const cur = activeConvo();
+  if (cur && cur.msgs.length === 0) {
+    convos = convos.filter((c) => c.id !== cur.id);
+  }
+  activeId = id;
+  renderConvoList();
+  renderChat();
+  sidebar.classList.remove("open");   // đóng sidebar trên mobile sau khi chọn
+}
+
+function renderConvoList() {
+  convoList.innerHTML = "";
+  convos.forEach((c) => {
+    const item = document.createElement("div");
+    item.className = "convo-item" + (c.id === activeId ? " active" : "");
+    item.textContent = c.title;
+    item.title = c.title;
+    item.onclick = () => switchConvo(c.id);
+    convoList.appendChild(item);
+  });
+}
+
+// Vẽ lại toàn bộ tin của cuộc đang mở (khi chuyển cuộc / khởi động)
+function renderChat() {
+  chat.innerHTML = "";
+  const c = activeConvo();
+  if (!c) return;
+  c.msgs.forEach((m) => {
+    const div = addMsg(m.text, m.cls);
+    if (m.sources) renderSources(div, m.sources);
+    if (m.fb) renderFeedback(div, m.fb.traceId, m.fb.query);
+  });
+}
 
 function addMsg(text, cls) {
   const div = document.createElement("div");
@@ -71,11 +139,26 @@ function renderFeedback(container, traceId, query) {
   container.appendChild(box);
 }
 
+newChatBtnInit();
+function newChatBtnInit() {
+  document.getElementById("new-chat").onclick = () => newConvo();
+  if (menuToggle) menuToggle.onclick = () => sidebar.classList.toggle("open");
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = input.value.trim();
   if (!q) return;
+  const c = activeConvo() || newConvo();
+
+  // Tin của người dùng
   addMsg(q, "user");
+  c.msgs.push({ role: "user", text: q, cls: "user" });
+  // Đặt tiêu đề cuộc theo câu hỏi đầu tiên
+  if (c.msgs.filter((m) => m.role === "user").length === 1) {
+    c.title = q.length > 34 ? q.slice(0, 34) + "…" : q;
+    renderConvoList();
+  }
   input.value = "";
   send.disabled = true;
 
@@ -85,12 +168,13 @@ form.addEventListener("submit", async (e) => {
     const res = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: q, history }),
+      body: JSON.stringify({ message: q, history: c.history }),
     });
     typing.remove();
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      addMsg("Lỗi: " + (err.detail || res.status), "bot no_info");
+      const div = addMsg("Lỗi: " + (err.detail || res.status), "bot no_info");
+      c.msgs.push({ role: "bot", text: div.textContent, cls: "bot no_info" });
       return;
     }
     const data = await res.json();
@@ -100,17 +184,23 @@ form.addEventListener("submit", async (e) => {
                  || data.kind === "degraded") ? "bot no_info" : "bot";
     const div = addMsg(data.answer, cls);
     renderSources(div, data.sources);
-    if (data.kind === "normal") renderFeedback(div, data.trace_id, data.query);
+    const showFb = data.kind === "normal";
+    if (showFb) renderFeedback(div, data.trace_id, data.query);
 
-    // Lưu lượt vào lịch sử để lượt sau có ngữ cảnh (kể cả câu hỏi lại [clarify]).
-    // KHÔNG lưu emergency (luật cứng, không phải mạch hội thoại thường).
-    // Với clarify: gắn lại marker [HỎI LẠI] vào bản LƯU (không hiển thị) để server đếm
-    // được số lần đã hỏi -> lưới an toàn không hỏi vô tận.
+    // Lưu tin bot vào cuộc (để render lại khi chuyển cuộc)
+    c.msgs.push({
+      role: "bot", text: data.answer, cls,
+      sources: data.sources,
+      fb: showFb ? { traceId: data.trace_id, query: data.query } : null,
+    });
+
+    // Lưu lượt vào history của CUỘC NÀY (ngữ cảnh gửi backend lượt sau).
+    // KHÔNG lưu emergency (luật cứng). clarify: gắn lại marker để server đếm số lần hỏi.
     if (data.kind !== "emergency") {
       const stored = data.kind === "clarify" ? "[HỎI LẠI] " + data.answer : data.answer;
-      history.push({ role: "user", content: q });
-      history.push({ role: "assistant", content: stored });
-      if (history.length > MAX_HISTORY * 2) history = history.slice(-MAX_HISTORY * 2);
+      c.history.push({ role: "user", content: q });
+      c.history.push({ role: "assistant", content: stored });
+      if (c.history.length > MAX_HISTORY * 2) c.history = c.history.slice(-MAX_HISTORY * 2);
     }
   } catch (err) {
     typing.remove();
@@ -120,3 +210,6 @@ form.addEventListener("submit", async (e) => {
     input.focus();
   }
 });
+
+// Khởi động: tạo sẵn 1 hội thoại trống
+newConvo();

@@ -7,18 +7,28 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header>
-    <h1>🩺 Trợ lý thông tin y tế</h1>
-    <p class="sub">Thông tin tham khảo — không thay thế chẩn đoán của bác sĩ.</p>
-  </header>
+  <div id="app">
+    <aside id="sidebar">
+      <button id="new-chat" type="button">＋ Hội thoại mới</button>
+      <nav id="convo-list"></nav>
+      <p class="side-note">Thông tin tham khảo — không thay thế bác sĩ.</p>
+    </aside>
 
-  <main id="chat"></main>
+    <div id="main">
+      <header>
+        <button id="menu-toggle" type="button" title="Danh sách hội thoại">☰</button>
+        <h1>🩺 Trợ lý thông tin y tế</h1>
+      </header>
 
-  <form id="form">
-    <input id="input" type="text" autocomplete="off"
-           placeholder="Nhập câu hỏi sức khoẻ..." required>
-    <button type="submit" id="send">Gửi</button>
-  </form>
+      <main id="chat"></main>
+
+      <form id="form">
+        <input id="input" type="text" autocomplete="off"
+               placeholder="Nhập câu hỏi sức khoẻ..." required>
+        <button type="submit" id="send">Gửi</button>
+      </form>
+    </div>
+  </div>
 
   <script src="/chat.js"></script>
 </body>
