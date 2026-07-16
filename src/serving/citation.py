@@ -9,6 +9,17 @@ import re
 
 _CITE_RE = re.compile(r"\[(\d+)\]")
 
+# LLM đôi khi TỰ viết khối "Nguồn tham khảo:" trong câu trả lời (vì thấy [1][2][3] trong
+# context). Ta đính nguồn ở tầng code (format_sources) -> phải cắt khối LLM tự viết để
+# tránh IN 2 LẦN. Cắt từ dòng "Nguồn tham khảo" (hoặc "Tài liệu tham khảo") tới hết.
+_SOURCES_HDR_RE = re.compile(r"\n+\s*(?:Nguồn|Tài liệu)\s+tham\s+khảo\s*:?.*$",
+                             re.IGNORECASE | re.DOTALL)
+
+
+def strip_llm_sources(answer: str) -> str:
+    """Bỏ khối 'Nguồn tham khảo:' mà LLM tự viết (nguồn thật được đính ở tầng code)."""
+    return _SOURCES_HDR_RE.sub("", answer).rstrip()
+
 
 def cited_indices(answer: str) -> list[int]:
     """Các số [i] xuất hiện trong answer (unique, giữ thứ tự)."""

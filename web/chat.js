@@ -3,6 +3,11 @@ const form = document.getElementById("form");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
 
+// Lịch sử hội thoại (client giữ — server stateless). Gửi kèm mỗi /chat.
+// Chỉ giữ vài lượt gần nhất để prompt không phình (khớp MAX_HISTORY_TURNS ở backend).
+let history = [];
+const MAX_HISTORY = 6;
+
 function addMsg(text, cls) {
   const div = document.createElement("div");
   div.className = "msg " + cls;
@@ -80,7 +85,7 @@ form.addEventListener("submit", async (e) => {
     const res = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: q }),
+      body: JSON.stringify({ message: q, history }),
     });
     typing.remove();
     if (!res.ok) {
@@ -90,11 +95,23 @@ form.addEventListener("submit", async (e) => {
     }
     const data = await res.json();
     const cls = data.kind === "emergency" ? "bot emergency"
+              : data.kind === "clarify" ? "bot clarify"
               : (data.kind === "no_info" || data.kind === "refuse"
                  || data.kind === "degraded") ? "bot no_info" : "bot";
     const div = addMsg(data.answer, cls);
     renderSources(div, data.sources);
     if (data.kind === "normal") renderFeedback(div, data.trace_id, data.query);
+
+    // Lưu lượt vào lịch sử để lượt sau có ngữ cảnh (kể cả câu hỏi lại [clarify]).
+    // KHÔNG lưu emergency (luật cứng, không phải mạch hội thoại thường).
+    // Với clarify: gắn lại marker [HỎI LẠI] vào bản LƯU (không hiển thị) để server đếm
+    // được số lần đã hỏi -> lưới an toàn không hỏi vô tận.
+    if (data.kind !== "emergency") {
+      const stored = data.kind === "clarify" ? "[HỎI LẠI] " + data.answer : data.answer;
+      history.push({ role: "user", content: q });
+      history.push({ role: "assistant", content: stored });
+      if (history.length > MAX_HISTORY * 2) history = history.slice(-MAX_HISTORY * 2);
+    }
   } catch (err) {
     typing.remove();
     addMsg("Không kết nối được máy chủ: " + err.message, "bot no_info");

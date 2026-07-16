@@ -215,13 +215,18 @@ class Retriever:
         sw = out["lexical_weights"][0]
         return dense, [int(k) for k in sw.keys()], [float(v) for v in sw.values()]
 
-    def retrieve(self, query: str) -> list[Hit]:
-        dense, sp_idx, sp_val = self._encode_query(query)
+    def retrieve(self, query: str, context: str = "") -> list[Hit]:
+        """context: các lượt hội thoại trước (tuỳ chọn) — ghép vào query để tìm đúng khi
+        câu hiện tại quá ngắn/tham chiếu ngầm (vd 'cách chữa thì sao?' sau khi kể triệu chứng).
+        Chỉ dùng cho encode + rerank; không hiển thị cho người dùng.
+        """
+        search_q = f"{context}\n{query}".strip() if context else query
+        dense, sp_idx, sp_val = self._encode_query(search_q)
         cands = hybrid_search_multi(self.client, list(self.cfg.collections),
                                     dense, sp_idx, sp_val, self.cfg.top_k)
         if not cands:
             return []
-        rerank_scores = self.reranker.score(query, [c.payload.get("text", "") for c in cands])
+        rerank_scores = self.reranker.score(search_q, [c.payload.get("text", "") for c in cands])
         return rank_candidates(cands, rerank_scores, self.cfg.source_priority,
                                self.cfg.min_score, self.cfg.top_n)
 

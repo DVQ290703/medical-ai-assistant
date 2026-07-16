@@ -37,14 +37,18 @@ def _refuse_out_of_scope(path: str = "configs/prompt.yaml") -> bool:
     return bool(y.get("refuse_out_of_scope", True))
 
 
-def decide(query: str) -> PolicyDecision:
-    # 1. Cấp cứu -> escalate (ưu tiên tuyệt đối)
+def decide(query: str, in_conversation: bool = False) -> PolicyDecision:
+    """in_conversation: đang giữa hội thoại (đã có lượt trước). Khi True, KHÔNG refuse câu
+    ngắn tiếp nối (vd 'trẻ 3 tuổi', '15kg') — tự nó không có dấu hiệu y tế nhưng là câu
+    trả lời cho câu bot vừa hỏi. Refuse out-of-scope chỉ áp cho câu MỞ ĐẦU cuộc hội thoại.
+    """
+    # 1. Cấp cứu -> escalate (ưu tiên tuyệt đối — xét MỌI lượt, kể cả giữa hội thoại)
     emg = escalation_message(query)
     if emg:
         return PolicyDecision(action="escalate", message=emg)
 
-    # 2. Ngoài phạm vi y tế -> refuse (nếu bật)
-    if _refuse_out_of_scope() and rules.is_out_of_scope(query):
+    # 2. Ngoài phạm vi y tế -> refuse (chỉ khi là câu MỞ ĐẦU, không phải câu tiếp nối)
+    if not in_conversation and _refuse_out_of_scope() and rules.is_out_of_scope(query):
         return PolicyDecision(action="refuse", message=REFUSE_MSG)
 
     # 3. Trả lời bình thường (đánh dấu need_doctor để chèn disclaimer phù hợp)

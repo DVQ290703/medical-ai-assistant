@@ -58,9 +58,20 @@ def gen_config_from_yaml(path: str = "configs/serving.yaml") -> GenConfig:
 
 
 class Engine:
-    """Base. generate(system, user) -> câu trả lời (str)."""
+    """Base. generate(system, user) -> câu trả lời (str).
+
+    generate_messages(system, turns): multi-turn — turns là list {role, content}
+    (lịch sử hội thoại đã cắt gọn), engine tự ghép với system. Mặc định fallback về
+    generate() 1 lượt nếu engine con chưa override (an toàn ngược).
+    """
     def generate(self, system: str, user: str) -> str:
         raise NotImplementedError
+
+    def generate_messages(self, system: str, turns: list[dict]) -> str:
+        # fallback: chỉ lấy lượt user cuối (mất ngữ cảnh, nhưng không vỡ)
+        last_user = next((t["content"] for t in reversed(turns)
+                          if t.get("role") == "user"), "")
+        return self.generate(system, last_user)
 
 
 class GroqEngine(Engine):
@@ -78,12 +89,14 @@ class GroqEngine(Engine):
             )
 
     def generate(self, system: str, user: str) -> str:
+        return self.generate_messages(system, [{"role": "user", "content": user}])
+
+    def generate_messages(self, system: str, turns: list[dict]) -> str:
         import requests
 
         payload = {
             "model": self.cfg.model,
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
+            "messages": [{"role": "system", "content": system}] + turns,
             "temperature": self.cfg.temperature,
             "max_tokens": self.cfg.max_tokens,
         }
@@ -128,9 +141,11 @@ class LocalEngine(Engine):
                 print(f"[gen] không gắn được adapter ({e}); dùng base model.")
 
     def generate(self, system: str, user: str) -> str:
+        return self.generate_messages(system, [{"role": "user", "content": user}])
+
+    def generate_messages(self, system: str, turns: list[dict]) -> str:
         self._load()
-        msgs = [{"role": "system", "content": system},
-                {"role": "user", "content": user}]
+        msgs = [{"role": "system", "content": system}] + turns
         prompt = self._tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
         inputs = self._tok(prompt, return_tensors="pt").to(self._model.device)
         out = self._model.generate(**inputs, max_new_tokens=self.cfg.max_tokens,

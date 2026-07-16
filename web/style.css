@@ -18,6 +18,7 @@ header .sub { margin: 4px 0 0; font-size: .8rem; opacity: .9; }
         border-bottom-left-radius: 4px; }
 .bot.emergency { background: #fff2f2; border-color: #e53935; color: #b71c1c; font-weight: 600; }
 .bot.no_info { background: #fff8e1; border-color: #f0c000; }
+.bot.clarify { background: #eef4ff; border-color: #4a7fe0; }   /* bot hỏi lại làm rõ */
 
 .sources { margin-top: 10px; font-size: .8rem; border-top: 1px dashed #ccc; padding-top: 8px; }
 .sources a { color: #0b6b5f; word-break: break-all; }

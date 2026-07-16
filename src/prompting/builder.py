@@ -20,13 +20,52 @@ def format_context(hits: list) -> str:
     return "\n\n".join(blocks)
 
 
-def build_user_prompt(query: str, hits: list) -> str:
-    """Ghép THÔNG TIN THAM KHẢO (đánh số) + câu hỏi + chỉ dẫn trích dẫn."""
+def build_user_prompt(query: str, hits: list, force_answer: bool = False) -> str:
+    """Ghép THÔNG TIN THAM KHẢO (đánh số) + câu hỏi + chỉ dẫn trích dẫn.
+
+    Lượt user cuối cùng trong hội thoại — nơi đính context RAG cho câu hỏi hiện tại.
+    force_answer=True: đã hỏi lại đủ số lần -> CẤM hỏi tiếp, buộc trả lời với gì đã biết.
+    """
     context = format_context(hits)
+    clarify_rule = (
+        "ĐÃ hỏi làm rõ đủ rồi — LẦN NÀY TUYỆT ĐỐI KHÔNG hỏi lại nữa (không dùng [HỎI LẠI]). "
+        "Hãy trả lời ngay dựa trên những gì đã biết trong hội thoại; nếu vẫn thiếu chi tiết, "
+        "nêu thông tin tham khảo chung + khuyên đi khám."
+        if force_answer else
+        "Nếu câu hỏi còn MƠ HỒ (thiếu triệu chứng/thời gian/mức độ) để trả lời an toàn, hãy "
+        "HỎI LẠI 1-2 câu làm rõ thay vì trả lời vội — mở đầu bằng '[HỎI LẠI]'."
+    )
     return (
         "THÔNG TIN THAM KHẢO (chỉ dùng những gì có ở đây, trích [số] khi dùng):\n"
         f"{context}\n\n"
         f"CÂU HỎI: {query}\n\n"
         "Trả lời bằng tiếng Việt, bám sát thông tin tham khảo, trích [số] cho mỗi ý dùng "
-        "nguồn. Nếu không đủ thông tin, nói rõ và khuyên đi khám."
+        "nguồn. Trả lời ĐÚNG và ĐỦ điều được hỏi: nếu hỏi CÁCH XỬ TRÍ/ĐIỀU TRỊ và tài liệu "
+        "có, phải nêu hướng xử trí cụ thể (chăm sóc tại nhà, nhóm thuốc, dấu hiệu cần đi khám "
+        f"ngay) — đừng chỉ nói 'đi khám bác sĩ'. {clarify_rule} "
+        "Nếu không đủ thông tin tham khảo, nói rõ và khuyên đi khám."
     )
+
+
+# số lượt hội thoại tối đa giữ lại (tránh prompt phình + rò rỉ ngữ cảnh cũ)
+MAX_HISTORY_TURNS = 6
+
+
+def build_turns(query: str, hits: list, history: list | None = None,
+                force_answer: bool = False) -> list[dict]:
+    """Ghép lịch sử hội thoại thành list messages cho engine.generate_messages.
+
+    history: list {role: 'user'|'assistant', content: str} các lượt TRƯỚC (không gồm
+    query hiện tại). Lượt cuối (query hiện tại) mới được đính context RAG — các lượt cũ
+    giữ nguyên text để model hiểu mạch, nhưng KHÔNG kèm lại context (tránh phình prompt).
+    force_answer: đã hỏi lại quá nhiều -> buộc trả lời (không hỏi tiếp).
+    """
+    turns: list[dict] = []
+    for h in (history or [])[-MAX_HISTORY_TURNS:]:
+        role = h.get("role")
+        content = (h.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            turns.append({"role": role, "content": content})
+    turns.append({"role": "user",
+                  "content": build_user_prompt(query, hits, force_answer=force_answer)})
+    return turns

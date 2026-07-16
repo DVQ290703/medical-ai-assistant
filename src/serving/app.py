@@ -50,8 +50,14 @@ def _rate_limit(ip: str):
         raise HTTPException(429, reason)
 
 
+class Turn(BaseModel):
+    role: str            # "user" | "assistant"
+    content: str
+
+
 class ChatReq(BaseModel):
     message: str
+    history: list[Turn] = []    # các lượt TRƯỚC (client giữ) — server stateless
 
 
 @app.get("/health")
@@ -66,8 +72,9 @@ def chat(req: ChatReq, request: Request):
     if not q:
         raise HTTPException(400, "message rỗng.")
     from src.serving.orchestrator import answer
+    history = [{"role": t.role, "content": t.content} for t in req.history]
     try:
-        a = answer(q)
+        a = answer(q, history=history)
     except SystemExit as e:      # lỗi hạ tầng (Qdrant/Colab/Groq) -> 503 rõ ràng
         raise HTTPException(503, f"Dịch vụ chưa sẵn sàng: {e}")
     except Exception as e:
