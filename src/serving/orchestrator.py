@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.serving.guards.input_guard import emergency_check
 from src.serving.guards.output_guard import check_output
+from src.serving.policy.engine import decide as policy_decide
+from src.serving.policy.disclaimer import disclaimer, has_disclaimer
 from src.prompting.template import load_system_prompt
 from src.prompting.builder import build_user_prompt
 from src.serving.citation import build_sources, format_sources
@@ -61,10 +62,13 @@ def warm_up():
 
 
 def answer(query: str, citation_required: bool = True) -> Answer:
-    # 1. CẤP CỨU: chặn cứng trước mọi thứ (không gọi retrieve/LLM)
-    emg = emergency_check(query)
-    if emg:
-        return Answer(text=emg, kind="emergency")
+    # 1. POLICY: quyết định hành động TRƯỚC retrieve/LLM
+    #    escalate (cấp cứu -> 115) | refuse (ngoài phạm vi) | answer
+    decision = policy_decide(query)
+    if decision.action == "escalate":
+        return Answer(text=decision.message, kind="emergency")
+    if decision.action == "refuse":
+        return Answer(text=decision.message, kind="refuse")
 
     _lazy_init()
 
@@ -95,6 +99,10 @@ def answer(query: str, citation_required: bool = True) -> Answer:
         print(f"[guard] đã che {guard.pii_redacted} PII trong câu trả lời.")
     if guard.warnings:
         print(f"[guard] cảnh báo: {guard.warnings}")
+
+    # 6. Policy: ÉP disclaimer y tế (nếu LLM chưa tự nhắc) — đảm bảo 100% có ở tầng app
+    if not has_disclaimer(text):
+        text += disclaimer(need_doctor=decision.need_doctor)
 
     return Answer(text=text + format_sources(sources), sources=sources,
                   warnings=guard.warnings)
