@@ -24,7 +24,10 @@ retriever:
   # Máy yếu -> remote. remote_url/token nên set qua .env (RAG_REMOTE_URL/RAG_REMOTE_TOKEN).
   encoder_backend: remote           # remote: gọi model server Colab (máy yếu không load local)
   remote_url: ""                    # vd https://xxx.ngrok-free.app (ưu tiên env RAG_REMOTE_URL)
+  remote_url_backup: ""             # dự phòng (env RAG_REMOTE_URL_BACKUP) — Colab thứ 2 / VPS
   remote_token: ""                  # khớp SECRET trong notebook (ưu tiên env RAG_REMOTE_TOKEN)
+  remote_timeout: 30                # giây/request tới model server
+  remote_retries: 1                 # retry mỗi endpoint trước khi sang backup
 reranker:
   model: BAAI/bge-reranker-v2-m3    # reranker đa ngữ (không dùng bản -en)
   top_n: 4

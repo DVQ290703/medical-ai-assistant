@@ -35,13 +35,10 @@ except ImportError:
     pass
 
 # THỨ TỰ IMPORT (Windows): nạp torch + FlagEmbedding TRƯỚC qdrant_client (qua vectorstore).
-# Nếu qdrant nạp native lib trước, tiến trình crash cứng không traceback khi sau đó import
-# FlagEmbedding. Đã gặp bug này ở embedding.py -> giữ đúng thứ tự.
-try:
-    import torch  # noqa: F401
-    from FlagEmbedding import BGEM3FlagModel  # noqa: F401
-except Exception:
-    pass
+# LƯU Ý: KHÔNG import FlagEmbedding ở top-level. Khi backend=remote (encode/rerank gọi
+# HTTP tới model server), máy client KHÔNG cần FlagEmbedding — và import nó có thể CRASH
+# NATIVE (segfault, try/except không bắt được) trên máy thiếu GPU/thư viện. Chỉ import
+# trong nhánh local của _encode_query (lazy), khi thật sự cần.
 
 from src.knowledge.vectorstore import connect, hybrid_search_multi
 from src.knowledge.reranker import Reranker
@@ -81,7 +78,10 @@ class RetrieverConfig:
     encoder_backend: str = "local"  # local | remote
     reranker_backend: str = "local"
     remote_url: str = ""
+    remote_url_backup: str = ""
     remote_token: str = ""
+    remote_timeout: int = 30
+    remote_retries: int = 1
 
     def __post_init__(self):
         if self.source_priority is None:
@@ -107,7 +107,10 @@ def config_from_yaml(path: str = CONFIG_PATH) -> RetrieverConfig:
     c.collections = tuple(r.get("collections", list(c.collections)))
     c.encoder_backend = r.get("encoder_backend", c.encoder_backend)
     c.remote_url = r.get("remote_url", c.remote_url)
+    c.remote_url_backup = r.get("remote_url_backup", c.remote_url_backup)
     c.remote_token = r.get("remote_token", c.remote_token)
+    c.remote_timeout = r.get("remote_timeout", c.remote_timeout)
+    c.remote_retries = r.get("remote_retries", c.remote_retries)
 
     rr = y.get("reranker", {}) or {}
     c.reranker_model = rr.get("model", c.reranker_model)
@@ -117,6 +120,7 @@ def config_from_yaml(path: str = CONFIG_PATH) -> RetrieverConfig:
 
     # env override (đổi ngrok URL mỗi session Colab dễ, không sửa yaml)
     c.remote_url = os.environ.get("RAG_REMOTE_URL", c.remote_url)
+    c.remote_url_backup = os.environ.get("RAG_REMOTE_URL_BACKUP", c.remote_url_backup)
     c.remote_token = os.environ.get("RAG_REMOTE_TOKEN", c.remote_token)
 
     vs = y.get("vectorstore", {}) or {}
@@ -180,27 +184,18 @@ class Retriever:
         self.client = connect(self.cfg.qdrant_host, self.cfg.qdrant_port)
         self.reranker = Reranker(self.cfg.reranker_model, self.cfg.reranker_device,
                                  self.cfg.reranker_fp16,
-                                 backend=self.cfg.reranker_backend,
-                                 remote_url=self.cfg.remote_url,
-                                 remote_token=self.cfg.remote_token)
+                                 backend=self.cfg.reranker_backend, cfg=self.cfg)
         self._encoder = None
 
     def _encode_remote(self, query: str):
-        """Gọi model server (Colab) /encode -> (dense, sparse_idx, sparse_val)."""
-        import requests
-        if not self.cfg.remote_url:
-            raise SystemExit("encoder_backend=remote nhưng thiếu remote_url "
-                             "(set RAG_REMOTE_URL trong .env hoặc rag.yaml).")
-        try:
-            r = requests.post(
-                self.cfg.remote_url.rstrip("/") + "/encode",
-                json={"query": query, "max_length": self.cfg.max_length},
-                headers={"X-Token": self.cfg.remote_token}, timeout=60)
-            r.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            raise SystemExit(f"[remote] model server không phản hồi ({e}). "
-                             "Kiểm tra notebook Colab còn chạy + RAG_REMOTE_URL đúng?")
-        d = r.json()
+        """Gọi model server /encode (có fallback + retry) -> (dense, sparse_idx, sparse_val).
+
+        Cả 2 endpoint chết -> RemoteUnavailable (orchestrator bắt -> graceful degrade).
+        """
+        from src.knowledge.remote_client import post_with_fallback
+        d = post_with_fallback("/encode",
+                               {"query": query, "max_length": self.cfg.max_length},
+                               self.cfg)
         return d["dense"], d["sparse"]["indices"], d["sparse"]["values"]
 
     def _encode_query(self, query: str):

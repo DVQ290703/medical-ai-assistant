@@ -24,11 +24,16 @@ from src.prompting.template import load_system_prompt
 from src.prompting.builder import build_user_prompt
 from src.serving.citation import build_sources, format_sources
 from src.generation.engine import engine_from_config, gen_config_from_yaml
+from src.monitoring import observability as obs
 
 
 NO_INFO_MSG = (
     "Thông tin hiện có chưa đủ để trả lời câu hỏi này một cách đáng tin cậy. "
     "Bạn nên đến khám bác sĩ để được tư vấn chính xác."
+)
+DEGRADED_MSG = (
+    "Hệ thống đang bận, vui lòng thử lại sau ít phút. "
+    "Nếu đây là trường hợp khẩn cấp, hãy gọi 115 hoặc đến cơ sở y tế gần nhất."
 )
 
 
@@ -36,8 +41,9 @@ NO_INFO_MSG = (
 class Answer:
     text: str
     sources: list = field(default_factory=list)
-    kind: str = "normal"        # normal | emergency | no_info
+    kind: str = "normal"        # normal | emergency | no_info | refuse | degraded
     warnings: list = field(default_factory=list)   # cờ từ output_guard (no_citation, PII...)
+    trace_id: str = ""          # id trace Langfuse (để gắn feedback 👍/👎 sau); "" nếu tắt
 
 
 # giữ retriever/engine tái dùng giữa các lần gọi (đỡ load lại)
@@ -62,6 +68,16 @@ def warm_up():
 
 
 def answer(query: str, citation_required: bool = True) -> Answer:
+    with obs.trace("rag-query", input=query) as tr:
+        result = _answer(query, citation_required)
+        tr.update(output=result.text, metadata={"kind": result.kind,
+                                                 "n_sources": len(result.sources)})
+        result.trace_id = getattr(tr, "trace_id", None) or ""   # để gắn feedback sau
+    obs.flush()
+    return result
+
+
+def _answer(query: str, citation_required: bool) -> Answer:
     # 1. POLICY: quyết định hành động TRƯỚC retrieve/LLM
     #    escalate (cấp cứu -> 115) | refuse (ngoài phạm vi) | answer
     decision = policy_decide(query)
@@ -73,14 +89,25 @@ def answer(query: str, citation_required: bool = True) -> Answer:
     _lazy_init()
 
     # 2. Retrieve (đã gồm hybrid + rerank + threshold + source priority)
-    hits = _retriever.retrieve(query)
+    #    Model server (Colab) chết -> graceful degrade (KHÔNG traceback, KHÔNG sập demo).
+    from src.knowledge.remote_client import RemoteUnavailable
+    try:
+        with obs.span("retrieve") as sp:
+            hits = _retriever.retrieve(query)
+            sp.update(output=f"{len(hits)} hits",
+                      metadata={"sources": [getattr(h, "source", "") for h in hits]})
+    except RemoteUnavailable as e:
+        print(f"[degraded] model server không phản hồi: {e}")
+        return Answer(text=DEGRADED_MSG, kind="degraded")
     if not hits:
         return Answer(text=NO_INFO_MSG, kind="no_info")
 
     # 3. Build prompt + generate
     system = load_system_prompt(_gen_cfg.system_prompt_path)
     user = build_user_prompt(query, hits)
-    text = _engine.generate(system, user)
+    with obs.span("generate", as_type="generation", model=_gen_cfg.model) as sp:
+        text = _engine.generate(system, user)
+        sp.update(output=text)
 
     # 4. Citation
     sources = build_sources(text, hits)

@@ -1,0 +1,10 @@
+{"text": "Bạn gọi cho tôi số 0912345678 để tư vấn thêm nhé", "expect_pii": true}
+{"text": "Email của bệnh nhân là nguyenvana@gmail.com", "expect_pii": true}
+{"text": "Liên hệ 0987654321 hoặc bacsi@benhvien.vn", "expect_pii": true}
+{"text": "Số căn cước 012345678901 của tôi", "expect_pii": true}
+{"text": "Gọi hotline 0901234567 nếu cần hỗ trợ", "expect_pii": true}
+{"text": "Paracetamol 500 mg uống mỗi 6 giờ khi sốt", "expect_pii": false}
+{"text": "Huyết áp bình thường khoảng 120/80 mmHg", "expect_pii": false}
+{"text": "Bệnh nhân cần uống đủ 2000 ml nước mỗi ngày", "expect_pii": false}
+{"text": "Liều Amoxicillin 500 mg ba lần một ngày", "expect_pii": false}
+{"text": "Chỉ số đường huyết lúc đói dưới 100 mg/dL là tốt", "expect_pii": false}

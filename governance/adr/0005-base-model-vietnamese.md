@@ -3,8 +3,7 @@
 **Status:** Proposed (chờ benchmark)
 **Context:**
 Domain = y học HIỆN ĐẠI, ngôn ngữ = tiếng Việt. Trực giác chọn model Việt-centric
-(Vistral/PhoGPT/VinaLlama), nhưng với domain chuyên sâu, kiến thức y khoa quan trọng hơn độ
-trôi chảy tiếng Việt. Lưu ý: lợi thế của Qwen (priors Trung, Hán-Việt) chủ yếu ở Y học CỔ
+(Vistral/PhoGPT/VinaLlama), nhưng với domain chuyên sâu, kiến thức y khoa quan trọng hơn độ trôi chảy tiếng Việt. Lưu ý: lợi thế của Qwen (priors Trung, Hán-Việt) chủ yếu ở Y học CỔ
 TRUYỀN; với y HIỆN ĐẠI (thuật ngữ gốc Latin/Anh) lợi thế này yếu đi.
 
 **Decision (đề xuất):**

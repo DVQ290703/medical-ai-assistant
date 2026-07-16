@@ -25,6 +25,14 @@ header .sub { margin: 4px 0 0; font-size: .8rem; opacity: .9; }
 
 .typing { align-self: flex-start; color: #889; font-style: italic; }
 
+.feedback { margin-top: 8px; font-size: .82rem; color: #667;
+            display: flex; align-items: center; gap: 4px; }
+.fb-btn { border: 1px solid #ccd2d8; background: #fff; border-radius: 6px;
+          cursor: pointer; font-size: .95rem; padding: 2px 8px; }
+.fb-btn:hover:not(:disabled) { background: #eef4f3; }
+.fb-btn:disabled { opacity: .4; cursor: default; }
+.fb-btn.chosen { border-color: #0b6b5f; background: #e3f0ee; }
+
 form { display: flex; gap: 10px; padding: 14px 20px; background: #fff;
        border-top: 1px solid #e0e4e8; }
 #input { flex: 1; padding: 12px 14px; border: 1px solid #ccd2d8;

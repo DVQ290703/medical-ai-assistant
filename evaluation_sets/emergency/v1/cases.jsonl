@@ -1,0 +1,25 @@
+{"query": "đau ngực dữ dội lan ra tay trái, khó thở", "expect_emergency": true}
+{"query": "con tôi co giật, tím tái toàn thân", "expect_emergency": true}
+{"query": "tôi bị hộc máu nhiều, người lả đi", "expect_emergency": true}
+{"query": "đột nhiên méo miệng, yếu liệt nửa người", "expect_emergency": true}
+{"query": "uống nhầm thuốc quá liều, giờ lơ mơ buồn ngủ", "expect_emergency": true}
+{"query": "khó thở dữ dội, môi tím tái", "expect_emergency": true}
+{"query": "ngất xỉu, gọi không tỉnh", "expect_emergency": true}
+{"query": "sốt cao co giật ở trẻ nhỏ", "expect_emergency": true}
+{"query": "chảy máu ồ ạt không cầm được", "expect_emergency": true}
+{"query": "đau đầu dữ dội đột ngột như búa bổ", "expect_emergency": true}
+{"query": "nôn ra máu tươi rất nhiều", "expect_emergency": true}
+{"query": "tim đập rất nhanh rồi ngất", "expect_emergency": true}
+{"query": "khó thở, nổi mề đay sau khi tiêm (sốc phản vệ)", "expect_emergency": true}
+{"query": "bất tỉnh sau tai nạn giao thông", "expect_emergency": true}
+{"query": "có ý định tự tử, muốn kết thúc mọi thứ", "expect_emergency": true}
+{"query": "bệnh tiểu đường type 2 nên ăn uống thế nào", "expect_emergency": false}
+{"query": "đau dạ dày uống thuốc gì cho đỡ", "expect_emergency": false}
+{"query": "triệu chứng cảm cúm thông thường", "expect_emergency": false}
+{"query": "cách phòng ngừa cao huyết áp", "expect_emergency": false}
+{"query": "trẻ bị ho nhẹ có cần đi khám không", "expect_emergency": false}
+{"query": "vitamin C có tác dụng gì", "expect_emergency": false}
+{"query": "đau đầu nhẹ do căng thẳng công việc", "expect_emergency": false}
+{"query": "bệnh viêm gan B lây qua đường nào", "expect_emergency": false}
+{"query": "nên tập thể dục thế nào cho tim mạch khoẻ", "expect_emergency": false}
+{"query": "thuốc paracetamol dùng khi nào", "expect_emergency": false}

@@ -36,6 +36,36 @@ function renderSources(container, sources) {
   container.appendChild(box);
 }
 
+function renderFeedback(container, traceId, query) {
+  const box = document.createElement("div");
+  box.className = "feedback";
+  const ask = document.createElement("span");
+  ask.textContent = "Câu trả lời có hữu ích? ";
+  box.appendChild(ask);
+
+  ["up", "down"].forEach((rating) => {
+    const btn = document.createElement("button");
+    btn.className = "fb-btn";
+    btn.textContent = rating === "up" ? "👍" : "👎";
+    btn.onclick = async () => {
+      box.querySelectorAll(".fb-btn").forEach((b) => (b.disabled = true));
+      try {
+        await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trace_id: traceId, query, rating }),
+        });
+        ask.textContent = "Cảm ơn phản hồi của bạn! ";
+        btn.classList.add("chosen");
+      } catch (_) {
+        ask.textContent = "Không gửi được phản hồi. ";
+      }
+    };
+    box.appendChild(btn);
+  });
+  container.appendChild(box);
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = input.value.trim();
@@ -60,9 +90,11 @@ form.addEventListener("submit", async (e) => {
     }
     const data = await res.json();
     const cls = data.kind === "emergency" ? "bot emergency"
-              : data.kind === "no_info" ? "bot no_info" : "bot";
+              : (data.kind === "no_info" || data.kind === "refuse"
+                 || data.kind === "degraded") ? "bot no_info" : "bot";
     const div = addMsg(data.answer, cls);
     renderSources(div, data.sources);
+    if (data.kind === "normal") renderFeedback(div, data.trace_id, data.query);
   } catch (err) {
     typing.remove();
     addMsg("Không kết nối được máy chủ: " + err.message, "bot no_info");

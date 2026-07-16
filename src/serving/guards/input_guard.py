@@ -16,7 +16,7 @@ _RED_FLAGS = [
     "dau nguc du doi", "dau nguc lan", "dau that nguc", "tuc nguc kho tho",
     "kho tho du doi", "kho tho nang", "tim ngung dap", "ngung tho",
     "co giat", "co giat toan than", "sui bot mep",
-    "ngat xiu", "bat tinh", "hon me", "li bi kho danh thuc", "lo mo",
+    "ngat xiu", "ngat", "xiu", "bat tinh", "hon me", "li bi kho danh thuc", "lo mo",
     "liet nua nguoi", "meo mieng", "noi ngong dot ngot", "yeu liet tay chan dot ngot",
     "mau khong cam", "chay mau o at", "non ra mau", "di ngoai ra mau nhieu",
     "hoc mau", "hoc ra mau", "ho ra mau", "non mau", "oi mau", "mua mau",
