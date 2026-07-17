@@ -7,9 +7,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Qdrant chạy trên máy HOST (ngoài container) -> host.docker.internal
+      # Qdrant: LOCAL (host) -> host.docker.internal:6333. CLOUD (deploy) -> set QDRANT_URL
+      # + QDRANT_API_KEY trong .env (khi có, code ưu tiên URL, bỏ qua host/port).
       - QDRANT_HOST=host.docker.internal
       - QDRANT_PORT=6333
+      - QDRANT_URL=${QDRANT_URL:-}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - RAG_REMOTE_URL=${RAG_REMOTE_URL}
       - RAG_REMOTE_TOKEN=${RAG_REMOTE_TOKEN}

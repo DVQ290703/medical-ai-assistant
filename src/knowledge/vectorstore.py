@@ -23,12 +23,24 @@ class Candidate:
 
 
 def connect(host: str = "localhost", port: int = 6333) -> QdrantClient:
-    client = QdrantClient(host=host, port=port)
+    """Kết nối Qdrant. Ưu tiên Qdrant Cloud nếu có QDRANT_URL + QDRANT_API_KEY (deploy),
+    ngược lại dùng host:port (local/docker).
+    """
+    import os
+    url = os.environ.get("QDRANT_URL", "").strip()
+    api_key = os.environ.get("QDRANT_API_KEY", "").strip()
+    if url:                       # Qdrant Cloud: https://xxx.qdrant.io + api key
+        client = QdrantClient(url=url, api_key=api_key or None)
+        target = url
+    else:                         # local / docker: host:port
+        client = QdrantClient(host=host, port=port)
+        target = f"{host}:{port}"
     try:
         client.get_collections()
     except Exception as e:
         raise SystemExit(
-            f"Không kết nối Qdrant {host}:{port} ({e}). Bật docker qdrant trước."
+            f"Không kết nối Qdrant {target} ({e}). "
+            "Local: bật docker qdrant. Cloud: kiểm tra QDRANT_URL/QDRANT_API_KEY."
         ) from e
     return client
 

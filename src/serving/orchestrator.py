@@ -95,7 +95,19 @@ def _answer(query: str, history: list, citation_required: bool) -> Answer:
 
     _lazy_init()
 
-    # 2. Retrieve (đã gồm hybrid + rerank + threshold + source priority)
+    # 2. INTENT GATE (ràng buộc CỨNG) — chạy TRƯỚC retrieve: nếu người dùng mô tả triệu
+    #    chứng để tìm bệnh mà chưa đủ chi tiết -> buộc HỎI LẠI do CODE kiểm soát (model
+    #    không có cơ hội phỏng đoán bệnh). Đặt trước retrieve để KHỎI retrieve uổng khi
+    #    phải hỏi lại (retrieve là bước nặng nhất). Rule lọc rẻ trong gate -> đa số lượt
+    #    không tốn thêm API. Chỉ gác khi CHƯA hỏi lại lần nào (gate tự kiểm tra history).
+    from src.prompting.intent_gate import clarification_question
+    with obs.span("intent-gate") as sp:
+        gate_q = clarification_question(query, history, _engine)
+        sp.update(output=gate_q or "(cho qua)")
+    if gate_q:
+        return Answer(text=gate_q, kind="clarify")
+
+    # 3. Retrieve (đã gồm hybrid + rerank + threshold + source priority)
     #    Ghép triệu chứng đã kể ở lượt trước vào query -> tìm đúng khi câu hiện tại ngắn/
     #    tham chiếu ngầm ("cách chữa thì sao?"). Chỉ lấy lượt USER (bỏ câu bot).
     #    Model server (Colab) chết -> graceful degrade (KHÔNG traceback, KHÔNG sập demo).
@@ -113,17 +125,7 @@ def _answer(query: str, history: list, citation_required: bool) -> Answer:
     if not hits:
         return Answer(text=NO_INFO_MSG, kind="no_info")
 
-    # 2b. INTENT GATE (ràng buộc CỨNG): nếu người dùng mô tả triệu chứng để tìm bệnh mà
-    #     chưa đủ chi tiết -> buộc HỎI LẠI do CODE kiểm soát (model không có cơ hội phỏng
-    #     đoán bệnh). Chỉ gác khi CHƯA hỏi lại lần nào (gate tự kiểm tra history).
-    from src.prompting.intent_gate import clarification_question
-    with obs.span("intent-gate") as sp:
-        gate_q = clarification_question(query, history, _engine)
-        sp.update(output=gate_q or "(cho qua)")
-    if gate_q:
-        return Answer(text=gate_q, kind="clarify")
-
-    # 3. Build prompt (gồm lịch sử hội thoại) + generate
+    # 4. Build prompt (gồm lịch sử hội thoại) + generate
     #    Lưới an toàn: nếu bot đã HỎI LẠI >= MAX_CLARIFY lần -> buộc trả lời (không hỏi vô tận).
     system = load_system_prompt(_gen_cfg.system_prompt_path)
     n_clarify = sum(1 for h in history
