@@ -17,6 +17,14 @@ import argparse
 import json
 from pathlib import Path
 
+# Nạp .env (QDRANT_URL/QDRANT_API_KEY...) NGAY khi chạy -> khỏi phải set $env: tay, tránh
+# lỗi "lạc session" (biến set ở cửa sổ khác -> script connect nhầm localhost).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import yaml
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
