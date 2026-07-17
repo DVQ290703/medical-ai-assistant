@@ -69,13 +69,13 @@ def delete_by_source(client: QdrantClient, collection: str, source: str) -> None
 
 
 def index_file(in_path: str, collection: str, config_path: str = CONFIG_PATH,
-               batch_size: int = 256, delete_source: str | None = None) -> int:
+               batch_size: int = 64, delete_source: str | None = None,
+               skip: int = 0) -> int:
     host, port, dim = load_qdrant_cfg(config_path)
-    client = QdrantClient(host=host, port=port)
-    try:
-        client.get_collections()
-    except Exception as e:
-        raise SystemExit(f"Không kết nối Qdrant {host}:{port} ({e}). Bật docker qdrant trước.")
+    # connect() ưu tiên Qdrant Cloud (QDRANT_URL + QDRANT_API_KEY) nếu có -> index thẳng
+    # lên cloud; ngược lại host:port (local). Dùng chung logic với retriever.
+    from src.knowledge.vectorstore import connect
+    client = connect(host, port)
     ensure_collection(client, collection, dim)
     if delete_source:
         delete_by_source(client, collection, delete_source)
@@ -85,12 +85,25 @@ def index_file(in_path: str, collection: str, config_path: str = CONFIG_PATH,
 
     def flush():
         nonlocal batch
-        if batch:
-            client.upsert(collection_name=collection, points=batch)
-            batch = []
+        if not batch:
+            return
+        import time
+        for attempt in range(4):          # retry: mạng cloud dễ timeout -> thử lại rồi mới bỏ
+            try:
+                client.upsert(collection_name=collection, points=batch, wait=False)
+                batch = []
+                return
+            except Exception as e:
+                if attempt == 3:
+                    raise
+                wait = 3 * (attempt + 1)
+                print(f"  [retry {attempt+1}] upsert lỗi ({type(e).__name__}); chờ {wait}s...")
+                time.sleep(wait)
 
     with open(in_path, encoding="utf-8") as f:
-        for line in f:
+        for i, line in enumerate(f):
+            if i < skip:                   # resume: bỏ qua N điểm đã index (chạy lại sau timeout)
+                continue
             line = line.strip()
             if not line:
                 continue
@@ -106,7 +119,7 @@ def index_file(in_path: str, collection: str, config_path: str = CONFIG_PATH,
             if len(batch) >= batch_size:
                 flush()
                 if (n // batch_size) % 10 == 0:
-                    print(f"  [{collection}] {n:,}")
+                    print(f"  [{collection}] {n + skip:,}")
     flush()
 
     info = client.get_collection(collection)
@@ -119,12 +132,15 @@ def main() -> None:
     ap.add_argument("--in", dest="in_path", required=True)
     ap.add_argument("--collection", required=True)
     ap.add_argument("--config", default=CONFIG_PATH)
-    ap.add_argument("--batch-size", type=int, default=256)
+    ap.add_argument("--batch-size", type=int, default=64,
+                    help="nhỏ hơn cho Cloud (mạng chậm dễ timeout). Local có thể tăng.")
     ap.add_argument("--delete-source", default=None,
                     help="xóa point source=X trong collection TRƯỚC khi index (vd byt-kcb)")
+    ap.add_argument("--skip", type=int, default=0,
+                    help="bỏ qua N dòng đầu (resume sau khi upload cloud bị timeout giữa chừng)")
     args = ap.parse_args()
     index_file(args.in_path, args.collection, args.config, args.batch_size,
-               args.delete_source)
+               args.delete_source, args.skip)
 
 
 if __name__ == "__main__":

@@ -29,11 +29,13 @@ def connect(host: str = "localhost", port: int = 6333) -> QdrantClient:
     import os
     url = os.environ.get("QDRANT_URL", "").strip()
     api_key = os.environ.get("QDRANT_API_KEY", "").strip()
+    # timeout dài cho Cloud (upload batch lớn qua internet dễ ReadTimeout với mặc định ~5s).
+    timeout = int(os.environ.get("QDRANT_TIMEOUT", "120"))
     if url:                       # Qdrant Cloud: https://xxx.qdrant.io + api key
-        client = QdrantClient(url=url, api_key=api_key or None)
+        client = QdrantClient(url=url, api_key=api_key or None, timeout=timeout)
         target = url
     else:                         # local / docker: host:port
-        client = QdrantClient(host=host, port=port)
+        client = QdrantClient(host=host, port=port, timeout=timeout)
         target = f"{host}:{port}"
     try:
         client.get_collections()
