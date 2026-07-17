@@ -118,7 +118,9 @@ if _web.is_dir():
 def main() -> None:
     import uvicorn
     host = CFG.get("host", "0.0.0.0")
-    port = CFG.get("port", 8000)
+    # Render/Heroku cấp port động qua env PORT -> PHẢI dùng nó (không thì bind sai port,
+    # deploy báo "no open ports"). Local: không có PORT -> lấy từ config (8000).
+    port = int(os.environ.get("PORT", CFG.get("port", 8000)))
     print(f"[serve] http://localhost:{port}  (rate {PER_MIN}/phút, {PER_DAY}/ngày)")
     uvicorn.run(app, host=host, port=port)
 

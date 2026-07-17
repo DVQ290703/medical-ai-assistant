@@ -1,0 +1,34 @@
+# Render deploy config (Infrastructure as Code).
+# Render đọc file này -> tạo Web Service từ Dockerfile. Đẩy code lên GitHub, sau đó ở
+# Render: New -> Blueprint -> chọn repo. Điền các secret (sync:false) trong dashboard.
+#
+# Kiến trúc: 1 service này = FastAPI backend + web/ tĩnh (frontend đi kèm). Phụ thuộc
+# ngoài: Qdrant Cloud (đã migrate), model server Colab (ngrok), Groq API.
+services:
+  - type: web
+    name: medical-ai-assistant
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free                    # free: ngủ sau 15' không dùng, dậy chậm ~30-60s. OK cho demo.
+    healthCheckPath: /health      # Dockerfile đã expose /health
+    envVars:
+      # Qdrant Cloud — corpus 184k điểm đã migrate. Điền giá trị trong dashboard.
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      # Model server (Colab qua ngrok) — encode/rerank. ĐỔI mỗi phiên Colab -> cập nhật lại.
+      - key: RAG_REMOTE_URL
+        sync: false
+      - key: RAG_REMOTE_TOKEN
+        sync: false
+      # Groq API — sinh câu trả lời.
+      - key: GROQ_API_KEY
+        sync: false
+      # Langfuse (observability) — tuỳ chọn; thiếu -> tự tắt (no-op).
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_BASE_URL
+        sync: false
