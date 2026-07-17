@@ -6,7 +6,7 @@ const convoList = document.getElementById("convo-list");
 const sidebar = document.getElementById("sidebar");
 const menuToggle = document.getElementById("menu-toggle");
 
-const MAX_HISTORY = 6;
+const MAX_HISTORY = 10;   // số cặp lượt client giữ + gửi (khớp MAX_HISTORY_TURNS backend)
 
 // --- Nhiều hội thoại (trong bộ nhớ phiên — tắt trang là mất) ---
 // Mỗi cuộc: { id, title, msgs[], history[] }

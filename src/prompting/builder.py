@@ -47,8 +47,9 @@ def build_user_prompt(query: str, hits: list, force_answer: bool = False) -> str
     )
 
 
-# số lượt hội thoại tối đa giữ lại (tránh prompt phình + rò rỉ ngữ cảnh cũ)
-MAX_HISTORY_TURNS = 6
+# số lượt hội thoại tối đa giữ lại (tránh prompt phình + rò rỉ ngữ cảnh cũ).
+# 10 = ~5 cặp hỏi-đáp: đủ nhớ 1 cuộc khám nhiều bước, chưa quá nặng token.
+MAX_HISTORY_TURNS = 10
 
 
 def _fewshot_turns(examples) -> list[dict]:

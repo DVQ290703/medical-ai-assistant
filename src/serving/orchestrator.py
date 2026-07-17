@@ -112,7 +112,8 @@ def _answer(query: str, history: list, citation_required: bool) -> Answer:
     #    tham chiếu ngầm ("cách chữa thì sao?"). Chỉ lấy lượt USER (bỏ câu bot).
     #    Model server (Colab) chết -> graceful degrade (KHÔNG traceback, KHÔNG sập demo).
     from src.knowledge.remote_client import RemoteUnavailable
-    ctx = " ".join(h["content"] for h in history[-6:]
+    from src.prompting.builder import MAX_HISTORY_TURNS
+    ctx = " ".join(h["content"] for h in history[-MAX_HISTORY_TURNS:]
                    if h.get("role") == "user" and h.get("content"))
     try:
         with obs.span("retrieve") as sp:
