@@ -21,6 +21,7 @@ Usage (notebook — GỌI HÀM, tránh argparse):
 """
 from __future__ import annotations
 
+from .mcq import is_mcq
 import argparse
 import json
 import re
@@ -31,9 +32,6 @@ import yaml
 
 _VI_CHARS = set("ăâđêôơưàảãáạằẳẵắặầẩẫấậèẻẽéẹềểễếệìỉĩíịòỏõóọồổỗốộờởỡớợùủũúụừửữứựỳỷỹýỵ"
                 "ĂÂĐÊÔƠƯ")
-# option trắc nghiệm: "A." "B)" đầu dòng hoặc sau khoảng trắng
-_MCQ_OPT_RE = re.compile(r"(?:^|\s)([A-E])[.)]\s+\S")
-
 
 def _norm_q(s: str) -> str:
     """Chuẩn hoá câu hỏi để so trùng (giữ dấu tiếng Việt, bỏ khoảng trắng thừa/dấu câu)."""
@@ -41,13 +39,6 @@ def _norm_q(s: str) -> str:
     s = re.sub(r"[^\w\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]",
                " ", s)
     return re.sub(r"\s+", " ", s).strip()
-
-
-def _is_mcq(rec: dict) -> bool:
-    text = f"{rec.get('question','')}\n{rec.get('response','')}"
-    letters = {m.group(1) for m in _MCQ_OPT_RE.finditer(text)}
-    return len(letters) >= 3   # >=3 lựa chọn A/B/C... -> trắc nghiệm
-
 
 def check_record(rec: dict, min_vi_ratio: float, min_resp_len: int) -> list[str]:
     """Trả danh sách vấn đề (rỗng = hợp lệ)."""
@@ -112,7 +103,7 @@ def validate_file(in_path: str, out_path: str, config_path: str | None = None,
             continue
         seen_q.add(key)
         # MCQ
-        if _is_mcq(rec):
+        if is_mcq(rec):
             if mcq_policy == "drop":
                 invalid.append({**rec, "_issues": ["MCQ (drop theo policy)"]})
                 continue
